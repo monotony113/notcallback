@@ -24,10 +24,12 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Generator
 from enum import Enum
 from functools import wraps
 from inspect import isgeneratorfunction
+from traceback import format_tb
 from typing import Any
 
 
@@ -37,7 +39,7 @@ class __(Enum):
     REJECTED = 'rejected'
 
 
-def freezable(error_func):
+def freezable(*, msg=None):
     def wrapper(cls):
 
         def _freeze(self):
@@ -47,7 +49,7 @@ def freezable(error_func):
 
         def __setattr__(self, name, value):
             if self._frozen:
-                raise error_func()
+                raise ValueError(msg)
             return super(cls, self).__setattr__(name, value)
 
         cls.__setattr__ = __setattr__
@@ -57,9 +59,13 @@ def freezable(error_func):
     return wrapper
 
 
+def _format_warning(message, category, filename, lineno, file=None, line=None):
+    return '------\n%s:%s: %s: %s\n------\n' % (filename, lineno, category.__name__, message)
+
+
 class EmptyGeneratorFunction:
 
-    @freezable(lambda: ValueError('Generator has already finished.'))
+    @freezable(msg='Generator has already finished.')
     class EmptyGenerator(Generator):
         def __init__(self, func, *args, **kwargs):
             self._func = func
@@ -79,14 +85,26 @@ class EmptyGeneratorFunction:
         def throw(self, typ, val=None, tb=None):
             return super().throw(typ, val=val, tb=tb)
 
+        @property
+        def value(self):
+            if not self._frozen:
+                raise ValueError('Generator has not been run.')
+            return self._result
+
     def __init__(self, func):
         self._func = func
 
     def __call__(self, *args, **kwargs):
         return self.EmptyGenerator(self._func, *args, **kwargs)
 
+    @classmethod
+    def ensure(cls, func):
+        if isgeneratorfunction(func):
+            return func
+        return cls(func)
 
-def _as_generator_func(func):
+
+def as_generator_func(func):
     if isgeneratorfunction(func):
         return func
 
@@ -96,13 +114,13 @@ def _as_generator_func(func):
     return gen
 
 
-@freezable(lambda: ValueError('Promise is already settled.'))
+@freezable(msg='Promise is already settled.')
 class Promise(Generator):
 
     def __init__(self, func, *args, **kwargs):
         self.state: __ = __.PENDING
         self.value: Any = None
-        self._func: Generator = _as_generator_func(func)(self._resolve, self._reject, *args, **kwargs)
+        self._func: Generator = as_generator_func(func)(self._resolve, self._reject, *args, **kwargs)
 
     def _resolve(self, value):
         self.state = __.FULFILLED
@@ -115,14 +133,12 @@ class Promise(Generator):
         self._freeze()
 
     @staticmethod
-    @_as_generator_func
     def _default_on_fulfill(value):
         pass
 
     @staticmethod
-    @_as_generator_func
-    def _default_on_reject(reason):
-        raise UnhandledPromiseRejection() from reason
+    def _default_on_reject(exc):
+        raise exc
 
     def then(self, on_fulfill=None, on_reject=None) -> Promise:
         if not on_fulfill:
@@ -130,18 +146,24 @@ class Promise(Generator):
         if not on_reject:
             on_reject = self._default_on_reject
 
-        on_fulfill = _as_generator_func(on_fulfill)
-        on_reject = _as_generator_func(on_reject)
+        on_fulfill = EmptyGeneratorFunction.ensure(on_fulfill)
+        on_reject = EmptyGeneratorFunction.ensure(on_reject)
 
         def settle(resolve, reject):
             try:
-                try:
-                    yield from self
-                    yield from resolve(self.value)
-                except Exception as e:
-                    yield from on_reject(e)
+                yield from self
+                if self.state is __.FULFILLED:
+                    fulfiller = on_fulfill(self.value)
+                    yield from fulfiller
+                    return resolve(fulfiller.value)
+                elif self.state is __.REJECTED:
+                    rejector = on_reject(self.value)
+                    yield from rejector
+                    return resolve(rejector.value)
+                else:
+                    raise ValueError(f'Unexpected Promise state {self.state}')
             except Exception as e:
-                yield from reject(e)
+                return reject(e)
 
         new_promise = Promise(settle)
         return new_promise
@@ -156,7 +178,6 @@ class Promise(Generator):
             raise
         except Exception as e:
             self._reject(e)
-            raise
 
     def __str__(self):
         return self.__repr__()
@@ -171,30 +192,48 @@ class Promise(Generator):
         return self._func.throw(typ, val, tb)
 
 
-class PromiseException(BaseException):
+class PromiseWarning(RuntimeWarning):
     pass
 
 
-class UnhandledPromiseRejection(PromiseException):
+class UnhandledPromiseRejectionWarning(PromiseWarning):
+    def __init__(self, exc):
+        self.exc = exc
+
     def __str__(self):
-        s = super().__str__()
-        if self.__cause__:
-            s += f'from {repr(self.__cause__)}'
-        return s
+        return (
+            '\n' + '\n'.join(format_tb(tb=self.exc.__traceback__)) + '\n'
+            f'{self.__class__.__name__}: from {repr(self.exc)}'
+        )
 
 
 def c(resolve, reject):
-    yield 3
-    yield from resolve(4)
+    return resolve(3)
 
 
 def d(value):
-    print(value)
     return 5
 
 
+def e(_):
+    raise RuntimeError()
+
+
+def catch(_):
+    print(repr(_))
+    return 'Saved.'
+
+
 if __name__ == '__main__':
-    a = EmptyGeneratorFunction(d)
-    b = a(3)
-    [_ for _ in b]
-    b._result = 5
+    p = (
+        Promise(c)
+        .then(e)
+        .catch(catch)
+        .then(print)
+        .then(d)
+        .then(print)
+        .then(lambda _: 15)
+    )
+    for _ in p:
+        pass
+    print(p)
