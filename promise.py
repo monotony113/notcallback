@@ -171,6 +171,25 @@ class Promise(Generator):
     def catch(self, on_reject):
         return self.then(None, on_reject)
 
+    def finally_(self, on_settle):
+        on_settle = EmptyGeneratorFunction.ensure(on_settle)
+
+        def settle(resolve, reject):
+            try:
+                yield from self
+                yield from on_settle()
+                if self.state is __.FULFILLED:
+                    return resolve(self.value)
+                elif self.state is __.REJECTED:
+                    return reject(self.value)
+                else:
+                    raise ValueError(f'Unexpected Promise state {self.state}')
+            except Exception as e:
+                return reject(e)
+
+        new_promise = Promise(settle)
+        return new_promise
+
     def __next__(self):
         try:
             return next(self._func)
@@ -208,6 +227,8 @@ class UnhandledPromiseRejectionWarning(PromiseWarning):
 
 
 def c(resolve, reject):
+    yield 1
+    yield 2
     return resolve(3)
 
 
@@ -225,15 +246,7 @@ def catch(_):
 
 
 if __name__ == '__main__':
-    p = (
-        Promise(c)
-        .then(e)
-        .catch(catch)
-        .then(print)
-        .then(d)
-        .then(print)
-        .then(lambda _: 15)
-    )
+    p = Promise(c).then(e).finally_(lambda: print('Huh?'))
     for _ in p:
         pass
     print(p)
