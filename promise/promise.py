@@ -41,7 +41,9 @@ class PromiseState(Enum):
         return self.value
 
 
-_ = PromiseState
+PENDING = PromiseState.PENDING
+FULFILLED = PromiseState.FULFILLED
+REJECTED = PromiseState.REJECTED
 
 
 def freezable(*, msg=None):
@@ -139,106 +141,25 @@ def as_generator_func(func):
     return gen
 
 
-def _resolve_promise(this: Promise, returned: Any):
-    if this is returned:
-        raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
-
-    if isinstance(returned, Promise):
-        yield from returned
-        this._adopt(returned)
-        return returned
-
-    if getattr(returned, 'then', None) and callable(returned.then):
-        return (yield from _resolve_promise_like(this, returned))
-
-    return (yield from this._resolve(returned))
+def _on_fulfill_passthrough(value):
+    return value
 
 
-def _resolve_promise_like(this: Promise, obj):
-    calls: Tuple[PromiseState, Any] = []
-
-    def on_fulfill(val):
-        calls.append((_.FULFILLED, val))
-
-    def on_reject(reason):
-        calls.append((_.REJECTED, reason))
-
-    try:
-        promise = obj.then(on_fulfill, on_reject)
-        if isgenerator(obj):
-            yield from promise
-    except PromiseException:
-        raise
-    except Exception as e:
-        if not calls:
-            calls.append((_.REJECTED, e))
-    finally:
-        if not calls:
-            return (yield from this._resolve(obj))
-        state, value = calls[0]
-        if state is _.FULFILLED:
-            return (yield from this._resolve(value))
-        return (yield from this._reject(value))
-
-
-def _make_executor(self):
-    def start_predecessor(resolve, reject):
-        if self._state is _.PENDING:
-            yield from self
-        else:
-            yield from self._settle()
-    return start_predecessor
+def _on_reject_reraise(exc):
+    if isinstance(exc, BaseException):
+        raise exc
+    raise PromiseRejection(exc)
 
 
 @freezable(msg='Promise is already settled.')
 class Promise(Generator):
-
-    def __init__(self, executor, *args, **kwargs):
-        self._state: _ = _.PENDING
+    def __init__(self, executor):
+        self._state: PromiseState = PENDING
         self._value: Any = None
-        self._exec: Generator = as_generator_func(executor)(self._resolve, self._reject, *args, **kwargs)
+        self._exec: Generator = as_generator_func(executor)(self._make_resolution, self._make_rejection)
         self._resolution = None
 
         self._resolvers: Queue = Queue()
-
-    def _resolve(self, value):
-        if self._state is _.PENDING:
-            self._state = _.FULFILLED
-            self._value = value
-            self._freeze()
-            yield from self._settle()
-
-    def _reject(self, reason):
-        if self._state is _.PENDING:
-            self._state = _.REJECTED
-            self._value = reason
-            self._freeze()
-            yield from self._settle()
-
-    def _settle(self):
-        try:
-            while True:
-                resolver = self._resolvers.get_nowait()
-                yield from resolver(self)
-                self._resolvers.task_done()
-        except Empty:
-            pass
-
-    def _adopt(self, other: Promise):
-        if other._state is _.FULFILLED:
-            yield from self._resolve(other._value)
-        if other._state is _.REJECTED:
-            yield from self._reject(other._value)
-
-    @staticmethod
-    def _default_on_fulfill(value):
-        return value
-
-    @staticmethod
-    def _default_on_reject(exc):
-        if isinstance(exc, BaseException):
-            raise exc
-        raise PromiseRejection(exc)
 
     @property
     def state(self) -> PromiseState:
@@ -246,41 +167,30 @@ class Promise(Generator):
 
     @property
     def value(self) -> Any:
-        if self._state is _.PENDING:
+        if self._state is PENDING:
             raise ValueError('Promise is not settled yet.')
         return self._value
 
     @property
     def is_pending(self) -> bool:
-        return self._state is _.PENDING
+        return self._state is PENDING
 
     @property
     def is_fulfilled(self) -> bool:
-        return self._state is _.FULFILLED
+        return self._state is FULFILLED
 
-    def then(self, on_fulfill=None, on_reject=None) -> Promise:
-        if not on_fulfill:
-            on_fulfill = self._default_on_fulfill
-        if not on_reject:
-            on_reject = self._default_on_reject
-
-        on_fulfill = CachedGeneratorFunc(on_fulfill)
-        on_reject = CachedGeneratorFunc(on_reject)
-
-        promise = Promise(_make_executor(self))
+    def then(self, on_fulfill=_on_fulfill_passthrough, on_reject=_on_reject_reraise) -> Promise:
+        promise = Promise(self._make_executor())
+        handlers = {
+            FULFILLED: CachedGeneratorFunc(on_fulfill),
+            REJECTED: CachedGeneratorFunc(on_reject),
+        }
 
         def resolver(settled: Promise):
             try:
-                if settled._state is _.FULFILLED:
-                    handler = on_fulfill(settled._value)
-                elif settled._state is _.REJECTED:
-                    handler = on_reject(settled._value)
-                else:
-                    raise UnexpectedPromiseStateError()
-
+                handler = handlers[settled._state](settled._value)
                 yield from handler
-                yield from _resolve_promise(promise, handler.result)
-
+                yield from self._resolve_promise(promise, handler.result)
             except PromiseException:
                 raise
             except Exception as e:
@@ -289,16 +199,12 @@ class Promise(Generator):
 
         return promise
 
-    def catch(self, on_reject=None) -> Promise:
-        return self.then(None, on_reject)
+    def catch(self, on_reject=_on_reject_reraise) -> Promise:
+        return self.then(_on_fulfill_passthrough, on_reject)
 
-    def finally_(self, on_settle=None) -> Promise:
-        if not on_settle:
-            on_settle = CachedGeneratorFunc(lambda: None)
-        else:
-            on_settle = CachedGeneratorFunc(on_settle)
-
+    def finally_(self, on_settle=lambda: None) -> Promise:
         promise = Promise(self._make_executor())
+        on_settle = CachedGeneratorFunc(on_settle)
 
         def resolver(settled: Promise):
             try:
@@ -315,7 +221,7 @@ class Promise(Generator):
     @classmethod
     def resolve(cls, value=None) -> Promise:
         p = Promise(CachedGeneratorFunc.noop())
-        p._state = _.FULFILLED
+        p._state = FULFILLED
         p._value = value
         p._freeze()
         return p
@@ -323,7 +229,7 @@ class Promise(Generator):
     @classmethod
     def reject(cls, reason=None) -> Promise:
         p = Promise(CachedGeneratorFunc.noop())
-        p._state = _.REJECTED
+        p._state = REJECTED
         p._value = reason
         p._freeze()
         return p
@@ -336,6 +242,93 @@ class Promise(Generator):
             pass
         return promise
 
+    def _make_resolution(self, value):
+        yield from self._resolve_promise(self, value)
+
+    def _make_rejection(self, reason):
+        yield from self._reject(reason)
+
+    def _resolve(self, value):
+        if self._state is PENDING:
+            self._state = FULFILLED
+            self._value = value
+            self._freeze()
+            yield from self._settle()
+
+    def _reject(self, reason):
+        if self._state is PENDING:
+            self._state = REJECTED
+            if isinstance(reason, PromiseRejection):
+                reason = reason.value
+            self._value = reason
+            self._freeze()
+            yield from self._settle()
+
+    def _settle(self):
+        try:
+            while True:
+                resolver = self._resolvers.get_nowait()
+                yield from resolver(self)
+                self._resolvers.task_done()
+        except Empty:
+            pass
+
+    def _adopt(self, other: Promise):
+        if other._state is FULFILLED:
+            yield from self._resolve(other._value)
+        if other._state is REJECTED:
+            yield from self._reject(other._value)
+
+    def _make_executor(self):
+        def start_predecessor(resolve, reject):
+            if self._state is PENDING:
+                yield from self
+            else:
+                yield from self._settle()
+        return start_predecessor
+
+    @classmethod
+    def _resolve_promise(cls, this: Promise, returned: Any):
+        if this is returned:
+            raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
+
+        if isinstance(returned, Promise):
+            yield from returned
+            yield from this._adopt(returned)
+            return returned
+
+        if getattr(returned, 'then', None) and callable(returned.then):
+            return (yield from cls._resolve_promise_like(this, returned))
+
+        return (yield from this._resolve(returned))
+
+    @classmethod
+    def _resolve_promise_like(cls, this: Promise, obj):
+        calls: Tuple[PromiseState, Any] = []
+
+        def on_fulfill(val):
+            calls.append((FULFILLED, val))
+
+        def on_reject(reason):
+            calls.append((REJECTED, reason))
+
+        try:
+            promise = obj.then(on_fulfill, on_reject)
+            if isgenerator(obj):
+                yield from promise
+        except PromiseException:
+            raise
+        except Exception as e:
+            if not calls:
+                calls.append((REJECTED, e))
+        finally:
+            if not calls:
+                return (yield from this._resolve(obj))
+            state, value = calls[0]
+            if state is FULFILLED:
+                return (yield from this._resolve(value))
+            return (yield from this._reject(value))
+
     def __next__(self):
         try:
             return next(self._resolution) if self._resolution else next(self._exec)
@@ -347,9 +340,9 @@ class Promise(Generator):
 
     def __str__(self):
         s1 = '<Promise at %s (%s)' % (hex(id(self)), self._state.value)
-        if self._state is _.PENDING:
+        if self._state is PENDING:
             return s1 + '>'
-        elif self._state is _.FULFILLED:
+        elif self._state is FULFILLED:
             return s1 + ' => ' + str(self._value) + '>'
         else:
             return s1 + ' => ' + repr(self._value) + '>'
@@ -366,7 +359,7 @@ class Promise(Generator):
     def __eq__(self, value):
         return (
             self.__class__ is value.__class__
-            and self._state is not _.PENDING
+            and self._state is not PENDING
             and self._state is value._state
             and self._value == value._value
         )
@@ -385,8 +378,4 @@ class PromiseRejection(RuntimeError):
 
 
 class HandlerNotCallableError(PromiseException, TypeError):
-    pass
-
-
-class UnexpectedPromiseStateError(PromiseException, RuntimeError):
     pass
