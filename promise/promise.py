@@ -121,12 +121,6 @@ class CachedGeneratorFunc:
         return self.CachedGenerator(self._func, *args, **kwargs)
 
     @classmethod
-    def noop(cls):
-        def noop(*args, **kwargs):
-            pass
-        return CachedGeneratorFunc(noop)
-
-    @classmethod
     def wrap(cls, func):
         return wraps(func)(cls(func))
 
@@ -220,19 +214,11 @@ class Promise(Generator):
 
     @classmethod
     def resolve(cls, value=None) -> Promise:
-        p = Promise(CachedGeneratorFunc.noop())
-        p._state = FULFILLED
-        p._value = value
-        p._freeze()
-        return p
+        return cls(lambda resolve, _: (yield from resolve(value)))
 
     @classmethod
     def reject(cls, reason=None) -> Promise:
-        p = Promise(CachedGeneratorFunc.noop())
-        p._state = REJECTED
-        p._value = reason
-        p._freeze()
-        return p
+        return cls(lambda _, reject: (yield from reject(reason)))
 
     @classmethod
     def settle(cls, promise: Promise) -> Promise:

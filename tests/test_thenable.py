@@ -287,3 +287,85 @@ def test_cyclic_promise3():
 
     assert p.state is REJECTED
     assert isinstance(p.value, RecursionError)
+
+
+def test_static_resolve():
+    p = Promise.resolve(3)
+    Promise.settle(p)
+    assert p.state is FULFILLED
+    assert p.value == 3
+
+
+def test_static_reject():
+    p = Promise.reject(12)
+    Promise.settle(p)
+    assert p.state is REJECTED
+    assert p.value == 12
+
+
+def test_static_resolve_with_rejection():
+    p = Promise(lambda resolve, _: (yield from resolve(Promise.reject(-1))))
+    Promise.settle(p)
+    assert p.state is REJECTED
+    assert p.value == -1
+
+
+def test_static_reject_with_resolution():
+    p = Promise(lambda _, reject: (yield from reject(Promise.resolve(1))))
+    Promise.settle(p)
+    assert p.state is REJECTED
+    assert isinstance(p.value, Promise)
+    assert p.value.state is PENDING
+
+
+def test_static_reject_then():
+    p = Promise(lambda _, reject: (yield from reject(Promise.resolve(1)))).then()
+    Promise.settle(p)
+    assert p.state is REJECTED
+    assert isinstance(p.value, Promise)
+    assert p.value.state is PENDING
+
+
+def test_static_reject_catch():
+    p = Promise(lambda _, reject: (yield from reject(Promise.resolve(1)))).catch(lambda v: v)
+    Promise.settle(p)
+    assert p.is_fulfilled
+    assert p.value == 1
+
+
+def test_finally():
+    values = {}
+
+    def f(r, _):
+        yield from r(Promise(f))
+
+    p = Promise(f).finally_(lambda: values.__setitem__('unconditional', True))
+
+    for _ in p:
+        pass
+
+    assert p.state is REJECTED
+    assert isinstance(p.value, RecursionError)
+    assert values['unconditional'] is True
+
+
+def test_finally_resolve():
+    def on_fulfill(_):
+        return Promise(lambda r, _: (yield from r(256 ** 256)))
+
+    p = Promise.resolve(4).then(on_fulfill).finally_()
+    Promise.settle(p)
+
+    assert p.is_fulfilled
+    assert p.value == 256 ** 256
+
+
+def test_finally_exc():
+    def throw():
+        raise BrokenPipeError()
+
+    p = Promise.resolve(0).finally_(throw)
+    Promise.settle(p)
+
+    assert p.state is REJECTED
+    assert isinstance(p.value, BrokenPipeError)
