@@ -1,6 +1,6 @@
 import pytest
 
-from promise.promise import FULFILLED, PENDING, REJECTED, Promise
+from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 
 from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
                         simple_resolve)

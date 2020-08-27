@@ -1,7 +1,8 @@
 import pytest
 
-from promise.promise import (FULFILLED, PENDING, REJECTED, Promise,
-                             UnhandledPromiseRejection, PromiseLocked, PromisePending)
+from notcallback.promise import (FULFILLED, PENDING, REJECTED, Promise,
+                                 PromiseLocked, PromisePending,
+                                 UnhandledPromiseRejection)
 
 from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
                         simple_resolve)
