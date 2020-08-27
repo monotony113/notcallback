@@ -1,7 +1,9 @@
 import pytest
-from promise.promise import Promise, PENDING, FULFILLED, REJECTED
 
-from .suppliers import simple_resolve, simple_reject, exceptional_reject, incorrect_resolve
+from promise.promise import FULFILLED, PENDING, REJECTED, Promise
+
+from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
+                        simple_resolve)
 
 pytestmark = pytest.mark.filterwarnings('ignore:UnhandledPromiseRejection')
 

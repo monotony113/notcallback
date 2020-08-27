@@ -1,7 +1,10 @@
 import pytest
-from promise.promise import Promise, PENDING, FULFILLED, REJECTED, UnhandledPromiseRejection
 
-from .suppliers import simple_resolve, simple_reject, exceptional_reject, incorrect_resolve
+from promise.promise import (FULFILLED, PENDING, REJECTED, Promise,
+                             UnhandledPromiseRejection, PromiseLocked)
+
+from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
+                        simple_resolve)
 
 
 def non_generator(resolve, reject):
@@ -86,7 +89,6 @@ def test_immutability():
         p = Promise(exceptional_reject)
         for _ in p:
             pass
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(PromiseLocked):
         p._frozen = False
         p._state = FULFILLED
-    assert str(excinfo.value) == 'Promise is already settled.'

@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Coroutine, Generator
+from collections.abc import Coroutine, Generator, Iterator
 from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
@@ -50,7 +50,7 @@ FULFILLED = PromiseState.FULFILLED
 REJECTED = PromiseState.REJECTED
 
 
-def freezable(*, msg=None):
+def freezable(*, raises=lambda: ValueError()):
     def wrapper(cls):
 
         def _freeze(self):
@@ -60,7 +60,7 @@ def freezable(*, msg=None):
 
         def __setattr__(self, name, value):
             if self._frozen:
-                raise ValueError(msg)
+                raise raises()
             return super(cls, self).__setattr__(name, value)
 
         cls.__setattr__ = __setattr__
@@ -72,7 +72,7 @@ def freezable(*, msg=None):
 
 class CachedGeneratorFunc:
 
-    @freezable(msg='Generator has already finished.')
+    @freezable(raises=lambda: ValueError('Generator has already finished.'))
     class CachedGenerator(Generator):
         def __init__(self, func, *args, **kwargs):
             self._func = func
@@ -149,8 +149,8 @@ def _on_reject_reraise(exc):
     raise PromiseRejection(exc)
 
 
-@freezable(msg='Promise is already settled.')
-class Promise(Coroutine, Generator):
+@freezable(raises=lambda: PromiseLocked())
+class Promise(Coroutine, Iterator):
     def __init__(self, executor):
         self._state: PromiseState = PENDING
         self._value: Any = None
@@ -378,14 +378,6 @@ class Promise(Coroutine, Generator):
         return repr(self.__str__())
 
 
-class PromiseException(Exception):
-    pass
-
-
-class PromiseWarning(RuntimeWarning):
-    pass
-
-
 class PromiseRejection(RuntimeError):
     def __init__(self, non_exc):
         self.value = non_exc
@@ -394,7 +386,20 @@ class PromiseRejection(RuntimeError):
         return self.__class__.__name__ + ': ' + str(self.value)
 
 
+class PromiseException(Exception):
+    pass
+
+
+class PromiseLocked(PromiseException):
+    def __init__(self, *args, **kwargs):
+        super().__init__('Cannot change the state of an already settled Promise.', *args, **kwargs)
+
+
 class HandlerNotCallableError(PromiseException, TypeError):
+    pass
+
+
+class PromiseWarning(RuntimeWarning):
     pass
 
 
