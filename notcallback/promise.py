@@ -20,8 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# Let there be no callback hell ...
-
 from __future__ import annotations
 
 import warnings
@@ -50,7 +48,7 @@ FULFILLED = PromiseState.FULFILLED
 REJECTED = PromiseState.REJECTED
 
 
-def freezable(*, raises=lambda: ValueError()):
+def _freezable(*, raises=lambda: ValueError()):
     def wrapper(cls):
 
         def _freeze(self):
@@ -58,10 +56,12 @@ def freezable(*, raises=lambda: ValueError()):
                 return
             self._frozen = True
 
+        original_setattr = cls.__setattr__
+
         def __setattr__(self, name, value):
             if self._frozen:
                 raise raises()
-            return super(cls, self).__setattr__(name, value)
+            return original_setattr(self, name, value)
 
         cls.__setattr__ = __setattr__
         cls._freeze = _freeze
@@ -70,10 +70,10 @@ def freezable(*, raises=lambda: ValueError()):
     return wrapper
 
 
-class CachedGeneratorFunc:
+class _CachedGeneratorFunc:
 
-    @freezable(raises=lambda: ValueError('Generator has already finished.'))
-    class CachedGenerator(Generator):
+    @_freezable(raises=lambda: ValueError('Generator has already finished.'))
+    class _CachedGenerator(Generator):
         def __init__(self, func, *args, **kwargs):
             self._func = func
             self._result = None
@@ -121,8 +121,8 @@ class CachedGeneratorFunc:
         else:
             self._func = func
 
-    def __call__(self, *args, **kwargs) -> CachedGeneratorFunc.CachedGenerator:
-        return self.CachedGenerator(self._func, *args, **kwargs)
+    def __call__(self, *args, **kwargs) -> _CachedGeneratorFunc._CachedGenerator:
+        return self._CachedGenerator(self._func, *args, **kwargs)
 
     @classmethod
     def wrap(cls, func):
@@ -149,7 +149,7 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@freezable(raises=lambda: PromiseLocked())
+@_freezable(raises=lambda: PromiseLocked())
 class Promise(Coroutine, Iterator):
     def __init__(self, executor):
         self._state: PromiseState = PENDING
@@ -158,7 +158,7 @@ class Promise(Coroutine, Iterator):
         self._lock = Lock()
 
         self._resolvers: Queue = Queue()
-        self._resolvers.put_nowait(_on_reject_warn_unhandled)
+        self._resolvers.put_nowait(_unhandled_rejection_warning)
         self._has_resolver = False
         self._resolving = None
 
@@ -202,7 +202,7 @@ class Promise(Coroutine, Iterator):
                 yield from resolver(self)
                 self._resolvers.task_done()
         except Empty:
-            pass
+            return
 
     def _adopt(self, other: Promise):
         if other._state is FULFILLED:
@@ -211,12 +211,12 @@ class Promise(Coroutine, Iterator):
             yield from self._reject(other._value)
 
     def _make_executor(self):
-        def start_predecessor(resolve, reject):
+        def resolve_predecessor(resolve, reject):
             if self._state is PENDING:
                 yield from self
             else:
                 yield from self._settle()
-        return start_predecessor
+        return resolve_predecessor
 
     @classmethod
     def _resolve_promise(cls, this: Promise, returned: Any):
@@ -282,8 +282,8 @@ class Promise(Coroutine, Iterator):
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
         promise = Promise(self._make_executor())
         handlers = {
-            FULFILLED: CachedGeneratorFunc(on_fulfill),
-            REJECTED: CachedGeneratorFunc(on_reject),
+            FULFILLED: _CachedGeneratorFunc(on_fulfill),
+            REJECTED: _CachedGeneratorFunc(on_reject),
         }
 
         def resolver(settled: Promise):
@@ -304,7 +304,7 @@ class Promise(Coroutine, Iterator):
 
     def finally_(self, on_settle=lambda: None) -> Promise:
         promise = Promise(self._make_executor())
-        on_settle = CachedGeneratorFunc(on_settle)
+        on_settle = _CachedGeneratorFunc(on_settle)
 
         def resolver(settled: Promise):
             try:
@@ -375,7 +375,7 @@ class Promise(Coroutine, Iterator):
             return s1 + ' => ' + repr(self._value) + '>'
 
     def __repr__(self):
-        return repr(self.__str__())
+        return '<Promise at %s (%s): %s>' % (hex(id(self)), self._state.value, repr(self._value))
 
 
 class PromiseRejection(RuntimeError):
@@ -413,15 +413,6 @@ class UnhandledPromiseRejection(PromiseWarning):
         super().__init__(*args, **kwargs)
         self.reason = reason
 
-    def __str__(self):
-        reason = self.reason
-        if isinstance(reason, BaseException):
-            tb = format_tb(reason.__traceback__)
-            reason = 'Traceback (most recent call last):\n%s\n%s: %s\n' % (''.join(tb), reason.__class__.__name__, str(reason))
-        else:
-            reason = str(reason)
-        return self.__class__.__name__ + ': ' + str(self.reason)
-
     def _print_warning(self):
         reason = self.reason
         if isinstance(reason, BaseException):
@@ -449,7 +440,7 @@ class UnhandledPromiseRejection(PromiseWarning):
 
 
 @as_generator_func
-def _on_reject_warn_unhandled(promise: Promise):
+def _unhandled_rejection_warning(promise: Promise):
     if promise._state is REJECTED:
         with UnhandledPromiseRejection.about_to_warn():
             warnings.warn(UnhandledPromiseRejection(promise._value))
