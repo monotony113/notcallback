@@ -1,7 +1,7 @@
 import pytest
 
 from promise.promise import (FULFILLED, PENDING, REJECTED, Promise,
-                             UnhandledPromiseRejection, PromiseLocked)
+                             UnhandledPromiseRejection, PromiseLocked, PromisePending)
 
 from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
                         simple_resolve)
@@ -31,9 +31,8 @@ def test_resolve():
 
 def test_value_accessor():
     p = Promise(simple_resolve)
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(PromisePending):
         p.value
-    assert str(excinfo.value) == 'Promise is not settled yet.'
 
 
 def test_reject():

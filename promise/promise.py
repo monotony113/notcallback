@@ -139,11 +139,11 @@ def as_generator_func(func):
     return gen
 
 
-def _on_fulfill_passthrough(value):
+def _passthrough(value):
     return value
 
 
-def _on_reject_reraise(exc):
+def _reraise(exc):
     if isinstance(exc, BaseException):
         raise exc
     raise PromiseRejection(exc)
@@ -268,7 +268,7 @@ class Promise(Coroutine, Iterator):
     @property
     def value(self) -> Any:
         if self._state is PENDING:
-            raise ValueError('Promise is not settled yet.')
+            raise PromisePending()
         return self._value
 
     @property
@@ -279,7 +279,7 @@ class Promise(Coroutine, Iterator):
     def is_fulfilled(self) -> bool:
         return self._state is FULFILLED
 
-    def then(self, on_fulfill=_on_fulfill_passthrough, on_reject=_on_reject_reraise) -> Promise:
+    def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
         promise = Promise(self._make_executor())
         handlers = {
             FULFILLED: CachedGeneratorFunc(on_fulfill),
@@ -299,8 +299,8 @@ class Promise(Coroutine, Iterator):
 
         return promise
 
-    def catch(self, on_reject=_on_reject_reraise) -> Promise:
-        return self.then(_on_fulfill_passthrough, on_reject)
+    def catch(self, on_reject=_reraise) -> Promise:
+        return self.then(_passthrough, on_reject)
 
     def finally_(self, on_settle=lambda: None) -> Promise:
         promise = Promise(self._make_executor())
@@ -388,6 +388,11 @@ class PromiseRejection(RuntimeError):
 
 class PromiseException(Exception):
     pass
+
+
+class PromisePending(PromiseException):
+    def __init__(self, *args, **kwargs):
+        super().__init__('Promise has not been settled.', *args, **kwargs)
 
 
 class PromiseLocked(PromiseException):
