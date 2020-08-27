@@ -24,11 +24,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+import warnings
+from collections.abc import Coroutine, Generator
 from enum import Enum
 from functools import wraps
 from inspect import isgenerator, isgeneratorfunction
 from queue import Empty, Queue
+from threading import Lock
 from typing import Any, Tuple
 
 
@@ -146,14 +148,17 @@ def _on_reject_reraise(exc):
 
 
 @freezable(msg='Promise is already settled.')
-class Promise(Generator):
+class Promise(Coroutine, Generator):
     def __init__(self, executor):
         self._state: PromiseState = PENDING
         self._value: Any = None
         self._exec: Generator = as_generator_func(executor)(self._make_resolution, self._make_rejection)
-        self._resolution = None
+        self._lock = Lock()
 
         self._resolvers: Queue = Queue()
+        # self._resolvers.put_nowait(_on_reject_warn_unhandled)
+        # self._has_resolver = False
+        self._resolving = None
 
     @property
     def state(self) -> PromiseState:
@@ -189,7 +194,7 @@ class Promise(Generator):
                 raise
             except Exception as e:
                 yield from promise._reject(e)
-        self._resolvers.put_nowait(resolver)
+        self._add_resolver(resolver)
 
         return promise
 
@@ -208,7 +213,7 @@ class Promise(Generator):
                 raise
             except Exception as e:
                 yield from promise._reject(e)
-        self._resolvers.put_nowait(resolver)
+        self._add_resolver(resolver)
 
         return promise
 
@@ -228,6 +233,16 @@ class Promise(Generator):
             pass
         return promise
 
+    @classmethod
+    def all(cls, *promises) -> Promise:
+        pass
+
+    def _add_resolver(self, resolver):
+        # if not self._has_resolver:
+        #     self._resolvers.get_nowait()
+        #     self._has_resolver = True
+        self._resolvers.put_nowait(resolver)
+
     def _make_resolution(self, value):
         yield from self._resolve_promise(self, value)
 
@@ -235,20 +250,22 @@ class Promise(Generator):
         yield from self._reject(reason)
 
     def _resolve(self, value):
-        if self._state is PENDING:
-            self._state = FULFILLED
-            self._value = value
-            self._freeze()
-            yield from self._settle()
+        with self._lock:
+            if self._state is PENDING:
+                self._state = FULFILLED
+                self._value = value
+                self._freeze()
+        yield from self._settle()
 
     def _reject(self, reason):
-        if self._state is PENDING:
-            self._state = REJECTED
-            if isinstance(reason, PromiseRejection):
-                reason = reason.value
-            self._value = reason
-            self._freeze()
-            yield from self._settle()
+        with self._lock:
+            if self._state is PENDING:
+                self._state = REJECTED
+                if isinstance(reason, PromiseRejection):
+                    reason = reason.value
+                self._value = reason
+                self._freeze()
+        yield from self._settle()
 
     def _settle(self):
         try:
@@ -317,24 +334,16 @@ class Promise(Generator):
 
     def __next__(self):
         try:
-            return next(self._resolution) if self._resolution else next(self._exec)
+            return next(self._resolving) if self._resolving else next(self._exec)
         except StopIteration:
             raise
         except Exception as e:
-            self._resolution = self._reject(e)
-            return next(self._resolution)
+            self._resolving = self._reject(e)
+            return next(self._resolving)
 
-    def __str__(self):
-        s1 = '<Promise at %s (%s)' % (hex(id(self)), self._state.value)
-        if self._state is PENDING:
-            return s1 + '>'
-        elif self._state is FULFILLED:
-            return s1 + ' => ' + str(self._value) + '>'
-        else:
-            return s1 + ' => ' + repr(self._value) + '>'
-
-    def __repr__(self):
-        return repr(self.__str__())
+    def __await__(self):
+        yield from self
+        return self
 
     def send(self, value):
         return self._exec.send(value)
@@ -349,6 +358,18 @@ class Promise(Generator):
             and self._state is value._state
             and self._value == value._value
         )
+
+    def __str__(self):
+        s1 = '<Promise at %s (%s)' % (hex(id(self)), self._state.value)
+        if self._state is PENDING:
+            return s1 + '>'
+        elif self._state is FULFILLED:
+            return s1 + ' => ' + str(self._value) + '>'
+        else:
+            return s1 + ' => ' + repr(self._value) + '>'
+
+    def __repr__(self):
+        return repr(self.__str__())
 
 
 class PromiseException(Exception):
@@ -365,3 +386,23 @@ class PromiseRejection(RuntimeError):
 
 class HandlerNotCallableError(PromiseException, TypeError):
     pass
+
+
+class UnhandledPromiseRejection(RuntimeWarning):
+    def __init__(self, reason, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reason = reason
+
+    def __str__(self):
+        return str(self.reason)
+
+
+def _on_reject_warn_unhandled(promise: Promise):
+    if promise._state is REJECTED:
+        with warnings.catch_warnings():
+            warnings.formatwarning = _formatwarning
+            warnings.warn(UnhandledPromiseRejection(promise._value))
+
+
+def _formatwarning(message, category, filename, lineno, file=None, line=None):
+    return '%s:%s: %s: %s\n' % (filename, lineno, category.__name__, message)
