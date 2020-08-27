@@ -1,5 +1,5 @@
 import pytest
-from promise.promise import Promise, PENDING, FULFILLED, REJECTED
+from promise.promise import Promise, PENDING, FULFILLED, REJECTED, UnhandledPromiseRejection
 
 from .suppliers import simple_resolve, simple_reject, exceptional_reject, incorrect_resolve
 
@@ -34,25 +34,28 @@ def test_value_accessor():
 
 
 def test_reject():
-    p = Promise(simple_reject)
-    for _ in p:
-        pass
-    assert p.state is REJECTED
+    with pytest.warns(UnhandledPromiseRejection):
+        p = Promise(simple_reject)
+        for _ in p:
+            pass
+        assert p.state is REJECTED
 
 
 def test_non_exception_reject():
-    p = Promise(simple_reject)
-    for _ in p:
-        pass
-    assert p.value == 6
+    with pytest.warns(UnhandledPromiseRejection):
+        p = Promise(simple_reject)
+        for _ in p:
+            pass
+        assert p.value == 6
 
 
 def test_exceptional_reject():
-    p = Promise(exceptional_reject)
-    for _ in p:
-        pass
-    assert p.state is REJECTED
-    assert isinstance(p.value, RecursionError)
+    with pytest.warns(UnhandledPromiseRejection):
+        p = Promise(exceptional_reject)
+        for _ in p:
+            pass
+        assert p.state is REJECTED
+        assert isinstance(p.value, RecursionError)
 
 
 def test_incorrect_resolve():
@@ -79,9 +82,10 @@ def test_multiple_settles():
 
 
 def test_immutability():
-    p = Promise(exceptional_reject)
-    for _ in p:
-        pass
+    with pytest.warns(UnhandledPromiseRejection):
+        p = Promise(exceptional_reject)
+        for _ in p:
+            pass
     with pytest.raises(ValueError) as excinfo:
         p._frozen = False
         p._state = FULFILLED

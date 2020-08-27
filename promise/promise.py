@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Coroutine, Generator
+from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
 from inspect import isgenerator, isgeneratorfunction
 from queue import Empty, Queue
 from threading import Lock
+from traceback import format_tb
 from typing import Any, Tuple
 
 
@@ -156,9 +158,108 @@ class Promise(Coroutine, Generator):
         self._lock = Lock()
 
         self._resolvers: Queue = Queue()
-        # self._resolvers.put_nowait(_on_reject_warn_unhandled)
-        # self._has_resolver = False
+        self._resolvers.put_nowait(_on_reject_warn_unhandled)
+        self._has_resolver = False
         self._resolving = None
+
+    def _add_resolver(self, resolver):
+        self._remove_default_resolver()
+        self._resolvers.put_nowait(resolver)
+
+    def _remove_default_resolver(self):
+        if not self._has_resolver:
+            self._resolvers.get_nowait()
+            self._has_resolver = True
+
+    def _make_resolution(self, value):
+        yield from self._resolve_promise(self, value)
+
+    def _make_rejection(self, reason):
+        yield from self._reject(reason)
+
+    def _resolve(self, value):
+        with self._lock:
+            if self._state is PENDING:
+                self._state = FULFILLED
+                self._value = value
+                self._freeze()
+        yield from self._settle()
+
+    def _reject(self, reason):
+        with self._lock:
+            if self._state is PENDING:
+                self._state = REJECTED
+                if isinstance(reason, PromiseRejection):
+                    reason = reason.value
+                self._value = reason
+                self._freeze()
+        yield from self._settle()
+
+    def _settle(self):
+        try:
+            while True:
+                resolver = self._resolvers.get_nowait()
+                yield from resolver(self)
+                self._resolvers.task_done()
+        except Empty:
+            pass
+
+    def _adopt(self, other: Promise):
+        if other._state is FULFILLED:
+            yield from self._resolve(other._value)
+        if other._state is REJECTED:
+            yield from self._reject(other._value)
+
+    def _make_executor(self):
+        def start_predecessor(resolve, reject):
+            if self._state is PENDING:
+                yield from self
+            else:
+                yield from self._settle()
+        return start_predecessor
+
+    @classmethod
+    def _resolve_promise(cls, this: Promise, returned: Any):
+        if this is returned:
+            raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
+
+        if isinstance(returned, Promise):
+            returned._remove_default_resolver()
+            yield from returned
+            yield from this._adopt(returned)
+            return returned
+
+        if getattr(returned, 'then', None) and callable(returned.then):
+            return (yield from cls._resolve_promise_like(this, returned))
+
+        return (yield from this._resolve(returned))
+
+    @classmethod
+    def _resolve_promise_like(cls, this: Promise, obj):
+        calls: Tuple[PromiseState, Any] = []
+
+        def on_fulfill(val):
+            calls.append((FULFILLED, val))
+
+        def on_reject(reason):
+            calls.append((REJECTED, reason))
+
+        try:
+            promise = obj.then(on_fulfill, on_reject)
+            if isgenerator(obj):
+                yield from promise
+        except PromiseException:
+            raise
+        except Exception as e:
+            if not calls:
+                calls.append((REJECTED, e))
+        finally:
+            if not calls:
+                return (yield from this._resolve(obj))
+            state, value = calls[0]
+            if state is FULFILLED:
+                return (yield from this._resolve(value))
+            return (yield from this._reject(value))
 
     @property
     def state(self) -> PromiseState:
@@ -237,105 +338,10 @@ class Promise(Coroutine, Generator):
     def all(cls, *promises) -> Promise:
         pass
 
-    def _add_resolver(self, resolver):
-        # if not self._has_resolver:
-        #     self._resolvers.get_nowait()
-        #     self._has_resolver = True
-        self._resolvers.put_nowait(resolver)
-
-    def _make_resolution(self, value):
-        yield from self._resolve_promise(self, value)
-
-    def _make_rejection(self, reason):
-        yield from self._reject(reason)
-
-    def _resolve(self, value):
-        with self._lock:
-            if self._state is PENDING:
-                self._state = FULFILLED
-                self._value = value
-                self._freeze()
-        yield from self._settle()
-
-    def _reject(self, reason):
-        with self._lock:
-            if self._state is PENDING:
-                self._state = REJECTED
-                if isinstance(reason, PromiseRejection):
-                    reason = reason.value
-                self._value = reason
-                self._freeze()
-        yield from self._settle()
-
-    def _settle(self):
-        try:
-            while True:
-                resolver = self._resolvers.get_nowait()
-                yield from resolver(self)
-                self._resolvers.task_done()
-        except Empty:
-            pass
-
-    def _adopt(self, other: Promise):
-        if other._state is FULFILLED:
-            yield from self._resolve(other._value)
-        if other._state is REJECTED:
-            yield from self._reject(other._value)
-
-    def _make_executor(self):
-        def start_predecessor(resolve, reject):
-            if self._state is PENDING:
-                yield from self
-            else:
-                yield from self._settle()
-        return start_predecessor
-
-    @classmethod
-    def _resolve_promise(cls, this: Promise, returned: Any):
-        if this is returned:
-            raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
-
-        if isinstance(returned, Promise):
-            yield from returned
-            yield from this._adopt(returned)
-            return returned
-
-        if getattr(returned, 'then', None) and callable(returned.then):
-            return (yield from cls._resolve_promise_like(this, returned))
-
-        return (yield from this._resolve(returned))
-
-    @classmethod
-    def _resolve_promise_like(cls, this: Promise, obj):
-        calls: Tuple[PromiseState, Any] = []
-
-        def on_fulfill(val):
-            calls.append((FULFILLED, val))
-
-        def on_reject(reason):
-            calls.append((REJECTED, reason))
-
-        try:
-            promise = obj.then(on_fulfill, on_reject)
-            if isgenerator(obj):
-                yield from promise
-        except PromiseException:
-            raise
-        except Exception as e:
-            if not calls:
-                calls.append((REJECTED, e))
-        finally:
-            if not calls:
-                return (yield from this._resolve(obj))
-            state, value = calls[0]
-            if state is FULFILLED:
-                return (yield from this._resolve(value))
-            return (yield from this._reject(value))
-
     def __next__(self):
         try:
             return next(self._resolving) if self._resolving else next(self._exec)
-        except StopIteration:
+        except (StopIteration, PromiseWarning):
             raise
         except Exception as e:
             self._resolving = self._reject(e)
@@ -376,6 +382,10 @@ class PromiseException(Exception):
     pass
 
 
+class PromiseWarning(RuntimeWarning):
+    pass
+
+
 class PromiseRejection(RuntimeError):
     def __init__(self, non_exc):
         self.value = non_exc
@@ -388,21 +398,48 @@ class HandlerNotCallableError(PromiseException, TypeError):
     pass
 
 
-class UnhandledPromiseRejection(RuntimeWarning):
+class UnhandledPromiseRejection(PromiseWarning):
     def __init__(self, reason, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reason = reason
 
     def __str__(self):
-        return str(self.reason)
+        reason = self.reason
+        if isinstance(reason, BaseException):
+            tb = format_tb(reason.__traceback__)
+            reason = 'Traceback (most recent call last):\n%s\n%s: %s\n' % (''.join(tb), reason.__class__.__name__, str(reason))
+        else:
+            reason = str(reason)
+        return self.__class__.__name__ + ': ' + str(self.reason)
+
+    def _print_warning(self):
+        reason = self.reason
+        if isinstance(reason, BaseException):
+            tb = format_tb(reason.__traceback__)
+            return (
+                'Traceback (most recent call last):\n%sUnhandled Promise Rejection: %s: %s\n'
+                % (''.join(tb), reason.__class__.__name__, str(reason))
+            )
+        else:
+            return self.__class__.__name__ + ': ' + str(reason)
+
+    @classmethod
+    @contextmanager
+    def about_to_warn(cls):
+        fmt = warnings.formatwarning
+        warnings.formatwarning = cls._formatwarning
+        try:
+            yield
+        finally:
+            warnings.formatwarning = fmt
+
+    @classmethod
+    def _formatwarning(cls, message, category, filename, lineno, file=None, line=None):
+        return message._print_warning()
 
 
+@as_generator_func
 def _on_reject_warn_unhandled(promise: Promise):
     if promise._state is REJECTED:
-        with warnings.catch_warnings():
-            warnings.formatwarning = _formatwarning
+        with UnhandledPromiseRejection.about_to_warn():
             warnings.warn(UnhandledPromiseRejection(promise._value))
-
-
-def _formatwarning(message, category, filename, lineno, file=None, line=None):
-    return '%s:%s: %s: %s\n' % (filename, lineno, category.__name__, message)

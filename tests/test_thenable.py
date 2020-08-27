@@ -1,6 +1,9 @@
+import pytest
 from promise.promise import Promise, PENDING, FULFILLED, REJECTED
 
 from .suppliers import simple_resolve, simple_reject, exceptional_reject, incorrect_resolve
+
+pytestmark = pytest.mark.filterwarnings('ignore:UnhandledPromiseRejection')
 
 
 def test_typecheck():
