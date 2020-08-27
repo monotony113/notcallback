@@ -1,8 +1,7 @@
 import pytest
 
 from notcallback.promise import (FULFILLED, PENDING, REJECTED, Promise,
-                                 PromiseLocked, PromisePending,
-                                 UnhandledPromiseRejectionWarning)
+                                 PromisePending)
 
 from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
                         simple_resolve)
@@ -37,28 +36,25 @@ def test_value_accessor():
 
 
 def test_reject():
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(simple_reject)
-        for _ in p:
-            pass
-        assert p.state is REJECTED
+    p = Promise(simple_reject)
+    for _ in p:
+        pass
+    assert p.state is REJECTED
 
 
 def test_non_exception_reject():
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(simple_reject)
-        for _ in p:
-            pass
-        assert p.value == 6
+    p = Promise(simple_reject)
+    for _ in p:
+        pass
+    assert p.value == 6
 
 
 def test_exceptional_reject():
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(exceptional_reject)
-        for _ in p:
-            pass
-        assert p.state is REJECTED
-        assert isinstance(p.value, RecursionError)
+    p = Promise(exceptional_reject)
+    for _ in p:
+        pass
+    assert p.state is REJECTED
+    assert isinstance(p.value, RecursionError)
 
 
 def test_incorrect_resolve():
@@ -84,14 +80,14 @@ def test_multiple_settles():
     assert p.value == 1
 
 
-def test_immutability():
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(exceptional_reject)
-        for _ in p:
-            pass
-    with pytest.raises(PromiseLocked):
-        p._frozen = False
-        p._state = FULFILLED
+# def test_immutability():
+#     with pytest.warns(UnhandledPromiseRejectionWarning):
+#         p = Promise(exceptional_reject)
+#         for _ in p:
+#             pass
+#     with pytest.raises(PromiseLocked):
+#         p._frozen = False
+#         p._state = FULFILLED
 
 
 def test_send():
@@ -100,20 +96,18 @@ def test_send():
             raise ArithmeticError()
         yield from resolve(True)
 
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(raise_on_truthy)
-        p.send(None)
-        p.send(True)
-        Promise.resolve(p)
-        assert p.state is REJECTED
-        assert isinstance(p.value, ArithmeticError)
+    p = Promise(raise_on_truthy)
+    p.send(None)
+    p.send(True)
+    Promise.resolve(p)
+    assert p.state is REJECTED
+    assert isinstance(p.value, ArithmeticError)
 
 
 def test_throw():
-    with pytest.warns(UnhandledPromiseRejectionWarning):
-        p = Promise(simple_resolve)
-        p.send(None)
-        p.throw(RuntimeError())
-        Promise.resolve(p)
-        assert p.state is REJECTED
-        assert isinstance(p.value, RuntimeError)
+    p = Promise(simple_resolve)
+    p.send(None)
+    p.throw(RuntimeError())
+    Promise.resolve(p)
+    assert p.state is REJECTED
+    assert isinstance(p.value, RuntimeError)

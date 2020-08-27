@@ -23,13 +23,12 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Coroutine, Generator, Iterator
+from collections import deque
+from collections.abc import Coroutine, Generator
 from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
 from inspect import isgenerator, isgeneratorfunction
-from queue import Empty, Queue
-from threading import Lock
 from traceback import format_tb
 from typing import Any, Tuple
 
@@ -48,35 +47,13 @@ FULFILLED = PromiseState.FULFILLED
 REJECTED = PromiseState.REJECTED
 
 
-def _freezable(*, raises=lambda: ValueError()):
-    def wrapper(cls):
-
-        def _freeze(self):
-            if self._frozen:
-                return
-            self._frozen = True
-
-        original_setattr = cls.__setattr__
-
-        def __setattr__(self, name, value):
-            if self._frozen:
-                raise raises()
-            return original_setattr(self, name, value)
-
-        cls.__setattr__ = __setattr__
-        cls._freeze = _freeze
-        cls._frozen = False
-        return cls
-    return wrapper
-
-
 class _CachedGeneratorFunc:
 
-    @_freezable(raises=lambda: ValueError('Generator has already finished.'))
     class _CachedGenerator(Generator):
         def __init__(self, func, *args, **kwargs):
             self._func = func
             self._result = None
+            self._finished = False
 
             self._func_is_generator = isgeneratorfunction(func)
             if self._func_is_generator:
@@ -86,7 +63,7 @@ class _CachedGeneratorFunc:
                 self._kwargs = kwargs
 
         def __next__(self):
-            if not self._frozen:
+            if not self._finished:
                 if not self._func_is_generator:
                     self._result = self._func(*self._args, **self._kwargs)
                 else:
@@ -94,7 +71,7 @@ class _CachedGeneratorFunc:
                         return next(self._func)
                     except StopIteration as stop:
                         self._result = stop.value
-                self._freeze()
+                self._finished = True
             raise StopIteration(self._result)
 
         def send(self, value):
@@ -109,7 +86,7 @@ class _CachedGeneratorFunc:
 
         @property
         def result(self):
-            if not self._frozen:
+            if not self._finished:
                 raise ValueError('Generator has not been run.')
             return self._result
 
@@ -149,26 +126,22 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@_freezable(raises=lambda: PromiseLocked())
-class Promise(Coroutine, Iterator):
+class Promise(Coroutine, Generator):
     def __init__(self, executor):
         self._state: PromiseState = PENDING
         self._value: Any = None
         self._exec: Generator = as_generator_func(executor)(self._make_resolution, self._make_rejection)
-        self._lock = Lock()
 
-        self._resolvers: Queue = Queue()
-        self._resolvers.put_nowait(_unhandled_rejection_warning)
+        self._resolvers = deque()
         self._has_resolver = False
         self._in_progress = None
 
     def _add_resolver(self, resolver):
-        self._remove_default_resolver()
-        self._resolvers.put_nowait(resolver)
+        self._resolvers.append(resolver)
 
     def _remove_default_resolver(self):
         if not self._has_resolver:
-            self._resolvers.get_nowait()
+            self._resolvers.pop()
             self._has_resolver = True
 
     def _make_resolution(self, value):
@@ -178,31 +151,22 @@ class Promise(Coroutine, Iterator):
         yield from self._reject(reason)
 
     def _resolve(self, value):
-        with self._lock:
-            if self._state is PENDING:
-                self._state = FULFILLED
-                self._value = value
-                self._freeze()
+        if self._state is PENDING:
+            self._state = FULFILLED
+            self._value = value
         yield from self._settle()
 
     def _reject(self, reason):
-        with self._lock:
-            if self._state is PENDING:
-                self._state = REJECTED
-                if isinstance(reason, PromiseRejection):
-                    reason = reason.value
-                self._value = reason
-                self._freeze()
+        if self._state is PENDING:
+            self._state = REJECTED
+            if isinstance(reason, PromiseRejection):
+                reason = reason.value
+            self._value = reason
         yield from self._settle()
 
     def _settle(self):
-        try:
-            while True:
-                resolver = self._resolvers.get_nowait()
-                yield from resolver(self)
-                self._resolvers.task_done()
-        except Empty:
-            return
+        while self._resolvers:
+            yield from self._resolvers.popleft()(self)
 
     def _adopt(self, other: Promise):
         if other._state is FULFILLED:
@@ -224,7 +188,6 @@ class Promise(Coroutine, Iterator):
             raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
 
         if isinstance(returned, Promise):
-            returned._remove_default_resolver()
             yield from returned
             yield from this._adopt(returned)
             return returned
@@ -345,23 +308,42 @@ class Promise(Coroutine, Iterator):
 
     def __next__(self):
         try:
-            return next(self._in_progress) if self._in_progress else next(self._exec)
+            if self._in_progress:
+                return next(self._in_progress)
+            return next(self._exec)
         except (StopIteration, PromiseWarning):
             raise
         except Exception as e:
-            return next(self._begin_to(self._reject, e))
+            try:
+                return next(self._begin_to(self._reject, e))
+            except StopIteration:
+                pass
 
     def send(self, value):
         try:
+            if self._in_progress:
+                return self._in_progress.send(value)
             return self._exec.send(value)
+        except (StopIteration, PromiseWarning):
+            raise
         except Exception as e:
-            return next(self._begin_to(self._reject, e))
+            try:
+                return self._begin_to(self._reject, e).send(None)
+            except StopIteration:
+                pass
 
     def throw(self, typ, val=None, tb=None):
         try:
+            if self._in_progress:
+                return self._in_progress.throw(typ, val, tb)
             return self._exec.throw(typ, val, tb)
+        except (StopIteration, PromiseWarning):
+            raise
         except Exception as e:
-            return next(self._begin_to(self._reject, e))
+            try:
+                return self._begin_to(self._reject, e).send(None)
+            except StopIteration:
+                pass
 
     def __await__(self):
         yield from self

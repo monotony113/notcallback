@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
@@ -374,3 +376,29 @@ def test_finally_exc():
 
     assert p.state is REJECTED
     assert isinstance(p.value, BrokenPipeError)
+
+
+def test_branching():
+    values = {}
+
+    def power_of(p):
+        def calc(val):
+            return val ** p
+        return calc
+
+    def setitem(k):
+        def s(v):
+            values[k] = v
+        return s
+
+    p0 = Promise(lambda r, _: (yield from r(random.randint(0, 64))))
+    promises = {}
+
+    for i in range(16):
+        promises[i] = p0.then(power_of(i)).then(setitem(i))
+
+    Promise.settle(p0)
+
+    for i in range(16):
+        assert promises[i].is_fulfilled
+        assert values[i] == p0.value ** i
