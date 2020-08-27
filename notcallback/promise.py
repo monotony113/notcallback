@@ -160,7 +160,7 @@ class Promise(Coroutine, Iterator):
         self._resolvers: Queue = Queue()
         self._resolvers.put_nowait(_unhandled_rejection_warning)
         self._has_resolver = False
-        self._resolving = None
+        self._in_progress = None
 
     def _add_resolver(self, resolver):
         self._remove_default_resolver()
@@ -261,6 +261,11 @@ class Promise(Coroutine, Iterator):
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
 
+    def _begin_to(self, method=None, value=None):
+        if not self._in_progress:
+            self._in_progress = method(value)
+        return self._in_progress
+
     @property
     def state(self) -> PromiseState:
         return self._state
@@ -340,22 +345,27 @@ class Promise(Coroutine, Iterator):
 
     def __next__(self):
         try:
-            return next(self._resolving) if self._resolving else next(self._exec)
+            return next(self._in_progress) if self._in_progress else next(self._exec)
         except (StopIteration, PromiseWarning):
             raise
         except Exception as e:
-            self._resolving = self._reject(e)
-            return next(self._resolving)
+            return next(self._begin_to(self._reject, e))
+
+    def send(self, value):
+        try:
+            return self._exec.send(value)
+        except Exception as e:
+            return next(self._begin_to(self._reject, e))
+
+    def throw(self, typ, val=None, tb=None):
+        try:
+            return self._exec.throw(typ, val, tb)
+        except Exception as e:
+            return next(self._begin_to(self._reject, e))
 
     def __await__(self):
         yield from self
-        return self
-
-    def send(self, value):
-        return self._exec.send(value)
-
-    def throw(self, typ, val=None, tb=None):
-        return self._exec.throw(typ, val, tb)
+        return self._value
 
     def __eq__(self, value):
         return (
@@ -408,21 +418,25 @@ class PromiseWarning(RuntimeWarning):
     pass
 
 
-class UnhandledPromiseRejection(PromiseWarning):
+class UnhandledPromiseRejectionWarning(PromiseWarning):
     def __init__(self, reason, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reason = reason
 
     def _print_warning(self):
         reason = self.reason
+        warn = self.__class__.__name__ + ': Unhandled promise rejection: '
         if isinstance(reason, BaseException):
             tb = format_tb(reason.__traceback__)
             return (
-                'Traceback (most recent call last):\n%sUnhandled Promise Rejection: %s: %s\n'
-                % (''.join(tb), reason.__class__.__name__, str(reason))
+                'Traceback (most recent call last):\n%s%s%s: %s\n'
+                % (''.join(tb), warn, reason.__class__.__name__, str(reason))
             )
         else:
-            return self.__class__.__name__ + ': ' + str(reason)
+            return warn + str(reason)
+
+    def __str__(self):
+        return self.__class__.__name__ + ': ' + str(self.reason)
 
     @classmethod
     @contextmanager
@@ -442,5 +456,5 @@ class UnhandledPromiseRejection(PromiseWarning):
 @as_generator_func
 def _unhandled_rejection_warning(promise: Promise):
     if promise._state is REJECTED:
-        with UnhandledPromiseRejection.about_to_warn():
-            warnings.warn(UnhandledPromiseRejection(promise._value))
+        with UnhandledPromiseRejectionWarning.about_to_warn():
+            warnings.warn(UnhandledPromiseRejectionWarning(promise._value))
