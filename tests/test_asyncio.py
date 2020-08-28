@@ -1,6 +1,7 @@
 import asyncio
-import pytest
 import time
+
+import pytest
 
 from notcallback import Promise
 

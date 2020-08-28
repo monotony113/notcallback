@@ -7,10 +7,9 @@ def async_compatible(cls):
         try:
             return asyncio.ensure_future(item)
         except TypeError:
-            async def r():
-                await asyncio.sleep(0)
-                return item
-            return asyncio.ensure_future(r())
+            future = asyncio.Future()
+            future.set_result(item)
+            return future
 
     def __await__(self):
         for i in self:
