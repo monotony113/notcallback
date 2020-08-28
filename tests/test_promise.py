@@ -40,12 +40,6 @@ def test_reject():
     for _ in p:
         pass
     assert p.state is REJECTED
-
-
-def test_non_exception_reject():
-    p = Promise(simple_reject)
-    for _ in p:
-        pass
     assert p.value == 6
 
 

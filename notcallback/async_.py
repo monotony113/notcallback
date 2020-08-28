@@ -1,6 +1,8 @@
 import asyncio
 from typing import Any
 
+from .exceptions import PromiseRejection
+
 
 def async_compatible(cls):
     def _as_async(item):
@@ -14,7 +16,14 @@ def async_compatible(cls):
     def __await__(self):
         for i in self:
             yield from _as_async(i)
-        return self._value
+        if self.is_fulfilled:
+            return self._value
+        elif self.is_rejected:
+            reason = self.value
+            if isinstance(reason, BaseException):
+                raise reason
+            raise PromiseRejection(reason)
+        raise ValueError('Unable to settle Promise.')
 
     _send = cls.send
     _throw = cls.throw
