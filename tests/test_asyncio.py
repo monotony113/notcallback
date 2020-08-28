@@ -2,7 +2,12 @@ import pytest
 
 from notcallback import Promise
 
-from .suppliers import simple_resolve
+
+async def simple_resolve(resolve, reject):
+    yield 1
+    yield 3
+    for _ in resolve(5):
+        yield _
 
 
 @pytest.mark.asyncio

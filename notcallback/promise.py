@@ -133,16 +133,11 @@ class Promise(Coroutine, Generator):
         self._exec: Generator = as_generator_func(executor)(self._make_resolution, self._make_rejection)
 
         self._resolvers = deque()
-        self._has_resolver = False
+
         self._in_progress = None
 
     def _add_resolver(self, resolver):
         self._resolvers.append(resolver)
-
-    def _remove_default_resolver(self):
-        if not self._has_resolver:
-            self._resolvers.pop()
-            self._has_resolver = True
 
     def _make_resolution(self, value):
         yield from self._resolve_promise(self, value)
@@ -174,13 +169,11 @@ class Promise(Coroutine, Generator):
         if other._state is REJECTED:
             yield from self._reject(other._value)
 
-    def _make_executor(self):
-        def resolve_predecessor(resolve, reject):
-            if self._state is PENDING:
-                yield from self
-            else:
-                yield from self._settle()
-        return resolve_predecessor
+    def _successor_executor(self, resolve, reject):
+        if self._state is PENDING:
+            yield from self
+        else:
+            yield from self._settle()
 
     @classmethod
     def _resolve_promise(cls, this: Promise, returned: Any):
@@ -248,7 +241,7 @@ class Promise(Coroutine, Generator):
         return self._state is FULFILLED
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
-        promise = Promise(self._make_executor())
+        promise = Promise(self._successor_executor)
         handlers = {
             FULFILLED: _CachedGeneratorFunc(on_fulfill),
             REJECTED: _CachedGeneratorFunc(on_reject),
@@ -271,7 +264,7 @@ class Promise(Coroutine, Generator):
         return self.then(_passthrough, on_reject)
 
     def finally_(self, on_settle=lambda: None) -> Promise:
-        promise = Promise(self._make_executor())
+        promise = Promise(self._successor_executor)
         on_settle = _CachedGeneratorFunc(on_settle)
 
         def resolver(settled: Promise):
@@ -437,6 +430,6 @@ class UnhandledPromiseRejectionWarning(PromiseWarning):
 
 @as_generator_func
 def _unhandled_rejection_warning(promise: Promise):
-    if promise._state is REJECTED:
+    if promise._warn_unhandled and promise._state is REJECTED:
         with UnhandledPromiseRejectionWarning.about_to_warn():
             warnings.warn(UnhandledPromiseRejectionWarning(promise._value))
