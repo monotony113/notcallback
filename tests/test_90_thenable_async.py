@@ -2,11 +2,12 @@ import random
 
 import pytest
 
+from notcallback.exceptions import PromiseRejection
 from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 
 from .suppliers import simple_resolve
 
-pytestmark = pytest.mark.filterwarnings('ignore::notcallback.promise.UnhandledPromiseRejectionWarning')
+pytestmark = pytest.mark.filterwarnings('ignore::notcallback.exceptions.UnhandledPromiseRejectionWarning')
 
 
 @pytest.mark.asyncio
@@ -50,19 +51,20 @@ async def test_async_fulfiller_exception():
     p2 = p.then(throw)
     p3 = p2.then(lambda val: values.__setitem__('result1', val) or 24)
 
-    v2 = await p2
+    with pytest.raises(TypeError):
+        v2 = await p2
 
-    assert p.state is FULFILLED
-    assert p.value == 5
+        assert p.state is FULFILLED
+        assert p.value == 5
 
-    assert p2.state is REJECTED
-    assert isinstance(v2, TypeError)
+        assert p2.state is REJECTED
+        assert isinstance(v2, TypeError)
 
-    assert p3.state is REJECTED
-    assert isinstance(p3.value, TypeError)
+        assert p3.state is REJECTED
+        assert isinstance(p3.value, TypeError)
 
-    assert p2.value is p3.value
-    assert not values
+        assert p2.value is p3.value
+        assert not values
 
 
 
@@ -159,11 +161,12 @@ async def test_async_dynamic_chain2():
     p1 = p0.catch(lambda _: _)
     p2 = p1.then(lambda _: values.__setitem__('fixed', _))
 
-    await p0
+    with pytest.raises(PromiseRejection) as excinfo:
+        await p0
 
-    assert p0.state is REJECTED
-    assert isinstance(p0.value, Promise)
-    assert p0.value.value == 64
+        assert p0.state is REJECTED
+        assert isinstance(excinfo.value.value, Promise)
+        assert p0.value.value == 64
 
     assert p1.state is FULFILLED
     assert p1.value == p0.value.value
@@ -197,26 +200,20 @@ async def test_async_static_resolve():
 @pytest.mark.asyncio
 async def test_async_static_reject():
     p = Promise.reject(12)
-    v = await p
-    assert p.state is REJECTED
-    assert v == 12
-
-
-@pytest.mark.asyncio
-async def test_async_static_resolve_with_rejection():
-    p = Promise(lambda resolve, _: (yield from resolve(Promise.reject(-1))))
-    v = await p
-    assert p.state is REJECTED
-    assert v == -1
+    with pytest.raises(PromiseRejection):
+        v = await p
+        assert p.state is REJECTED
+        assert v == 12
 
 
 @pytest.mark.asyncio
 async def test_async_static_reject_with_resolution():
     p = Promise(lambda _, reject: (yield from reject(Promise.resolve(1))))
-    v = await p
-    assert p.state is REJECTED
-    assert isinstance(p.value, Promise)
-    assert v.state is PENDING
+    with pytest.raises(PromiseRejection):
+        v = await p
+        assert p.state is REJECTED
+        assert isinstance(p.value, Promise)
+        assert v.state is PENDING
 
 
 @pytest.mark.asyncio

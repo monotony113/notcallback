@@ -22,120 +22,20 @@
 
 from __future__ import annotations
 
-import warnings
 from collections import deque
-from contextlib import contextmanager
-from enum import Enum
-from functools import wraps
-from inspect import isgenerator, isgeneratorfunction
-from traceback import format_tb
+from inspect import isgenerator
 from typing import Any, Tuple
 
+from .base import FULFILLED, PENDING, REJECTED, PromiseState
+from .exceptions import (PromiseException, PromisePending, PromiseRejection,
+                         PromiseWarning)
+from .utils import _CachedGeneratorFunc, as_generator_func
+
 try:
-    from .async_ import async_compatible
+    from .async_ import with_async_addons
 except Exception:
-    def async_compatible(cls):
+    def with_async_addons(cls):
         return cls
-
-
-class PromiseState(Enum):
-    PENDING = 'pending'
-    FULFILLED = 'fulfilled'
-    REJECTED = 'rejected'
-
-    def __str__(self):
-        return self.value
-
-
-PENDING = PromiseState.PENDING
-FULFILLED = PromiseState.FULFILLED
-REJECTED = PromiseState.REJECTED
-
-
-class _CachedGeneratorFunc:
-
-    class _CachedGenerator:
-        def __init__(self, func, *args, **kwargs):
-            self._func = func
-            self._result = None
-            self._finished = False
-
-            self._func_is_generator = isgeneratorfunction(func)
-            if self._func_is_generator:
-                self._func = self._func(*args, **kwargs)
-            else:
-                self._args = args
-                self._kwargs = kwargs
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            if not self._finished:
-                if not self._func_is_generator:
-                    self._result = self._func(*self._args, **self._kwargs)
-                else:
-                    try:
-                        return next(self._func)
-                    except StopIteration as stop:
-                        self._result = stop.value
-                self._finished = True
-            raise StopIteration(self._result)
-
-        def send(self, value):
-            if self._func_is_generator:
-                return self._func.send(value)
-            raise StopIteration(self._result)
-
-        def throw(self, typ, val=None, tb=None):
-            if self._func_is_generator:
-                return self._func.throw(typ, val=val, tb=tb)
-            if val is None:
-                if tb is None:
-                    raise typ
-                val = typ()
-            if tb is not None:
-                val = val.with_traceback(tb)
-            raise val
-
-        def close(self):
-            try:
-                self.throw(GeneratorExit)
-            except (GeneratorExit, StopIteration):
-                pass
-            else:
-                raise RuntimeError('Generator ignored GeneratorExit')
-
-        @property
-        def result(self):
-            if not self._finished:
-                raise ValueError('Generator has not been run.')
-            return self._result
-
-    def __init__(self, func):
-        if not callable(func):
-            raise HandlerNotCallableError(repr(func) + ' is not callable.')
-        if isinstance(func, self.__class__):
-            self._func = func._func
-        else:
-            self._func = func
-
-    def __call__(self, *args, **kwargs) -> _CachedGeneratorFunc._CachedGenerator:
-        return self._CachedGenerator(self._func, *args, **kwargs)
-
-    @classmethod
-    def wrap(cls, func):
-        return wraps(func)(cls(func))
-
-
-def as_generator_func(func):
-    if isgeneratorfunction(func):
-        return func
-
-    @wraps(func)
-    def gen(*args, **kwargs):
-        yield func(*args, **kwargs)
-    return gen
 
 
 def _passthrough(value):
@@ -148,7 +48,7 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@async_compatible
+@with_async_addons
 class Promise:
     def __init__(self, executor):
         self._state: PromiseState = PENDING
@@ -183,20 +83,23 @@ class Promise:
     def is_rejected(self) -> bool:
         return self._state is REJECTED
 
+    def is_rejected_due_to(self, exc_class) -> bool:
+        return self._state is REJECTED and isinstance(self._value, exc_class)
+
     def _add_resolver(self, resolver):
         self._resolvers.append(resolver)
 
-    def _make_resolution(self, value):
+    def _make_resolution(self, value=None):
         yield from self._resolve_promise(self, value)
 
-    def _make_rejection(self, reason):
+    def _make_rejection(self, reason=None):
         yield from self._reject(reason)
 
     def _resolve(self, value):
         if self._state is PENDING:
             self._state = FULFILLED
             self._value = value
-        yield from self._settle()
+        yield from self._run_resolvers()
 
     def _reject(self, reason):
         if self._state is PENDING:
@@ -204,9 +107,9 @@ class Promise:
             if isinstance(reason, PromiseRejection):
                 reason = reason.value
             self._value = reason
-        yield from self._settle()
+        yield from self._run_resolvers()
 
-    def _settle(self):
+    def _run_resolvers(self):
         while self._resolvers:
             yield from self._resolvers.popleft()(self)
 
@@ -231,11 +134,11 @@ class Promise:
 
         return (yield from this._resolve(returned))
 
-    def _successor_executor(self, resolve, reject):
+    def _successor_executor(self, resolve=None, reject=None):
         if self._state is PENDING:
             yield from self
         else:
-            yield from self._settle()
+            yield from self._run_resolvers()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
         promise = Promise(self._successor_executor)
@@ -293,8 +196,43 @@ class Promise:
         return promise
 
     @classmethod
+    def _multi_successors_executor(cls, promises):
+        def executor(resolve, reject):
+            for p in promises:
+                yield from p._successor_executor()
+        return executor
+
+    @classmethod
     def all(cls, *promises) -> Promise:
-        pass
+        fulfillments = {}
+        promise = Promise(cls._multi_successors_executor(promises))
+
+        def resolver(settled: Promise):
+            if promise._state is not PENDING:
+                yield from promise._run_resolvers()
+            if settled._state is REJECTED:
+                yield from promise._reject(settled._value)
+            fulfillments[settled] = settled._value
+            if len(fulfillments) == len(promises):
+                results = [fulfillments[p] for p in promises]
+                yield from promise._resolve(results)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
+
+    @classmethod
+    def race(cls, *promises):
+        promise = Promise(cls._multi_successors_executor(promises))
+
+        def resolver(settled: Promise):
+            if promise._state is not PENDING:
+                yield from promise._run_resolvers()
+            yield from promise._adopt(settled)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
 
     def __iter__(self):
         return self
@@ -379,74 +317,8 @@ class Promise:
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
 
+    def __await__(self):
+        raise NotImplementedError()
 
-class PromiseRejection(RuntimeError):
-    def __init__(self, non_exc):
-        self.value = non_exc
-
-    def __str__(self):
-        return self.__class__.__name__ + ': ' + str(self.value)
-
-
-class PromiseException(Exception):
-    pass
-
-
-class PromisePending(PromiseException):
-    def __init__(self, *args, **kwargs):
-        super().__init__('Promise has not been settled.', *args, **kwargs)
-
-
-class PromiseLocked(PromiseException):
-    def __init__(self, *args, **kwargs):
-        super().__init__('Cannot change the state of an already settled Promise.', *args, **kwargs)
-
-
-class HandlerNotCallableError(PromiseException, TypeError):
-    pass
-
-
-class PromiseWarning(RuntimeWarning):
-    pass
-
-
-class UnhandledPromiseRejectionWarning(PromiseWarning):
-    def __init__(self, reason, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.reason = reason
-
-    def _print_warning(self):
-        reason = self.reason
-        warn = self.__class__.__name__ + ': Unhandled promise rejection: '
-        if isinstance(reason, BaseException):
-            tb = format_tb(reason.__traceback__)
-            return (
-                'Traceback (most recent call last):\n%s%s%s: %s\n'
-                % (''.join(tb), warn, reason.__class__.__name__, str(reason))
-            )
-        else:
-            return warn + str(reason)
-
-    def __str__(self):
-        return self.__class__.__name__ + ': ' + str(self.reason)
-
-    @classmethod
-    @contextmanager
-    def about_to_warn(cls):
-        fmt = warnings.formatwarning
-        warnings.formatwarning = cls._formatwarning
-        try:
-            yield
-        finally:
-            warnings.formatwarning = fmt
-
-    @classmethod
-    def _formatwarning(cls, message, category, filename, lineno, file=None, line=None):
-        return message._print_warning()
-
-
-@as_generator_func
-def _unhandled_rejection_warning(promise: Promise):
-    if promise._warn_unhandled and promise._state is REJECTED:
-        with UnhandledPromiseRejectionWarning.about_to_warn():
-            warnings.warn(UnhandledPromiseRejectionWarning(promise._value))
+    def awaitable(self):
+        raise NotImplementedError()

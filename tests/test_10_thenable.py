@@ -7,7 +7,7 @@ from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
                         simple_resolve)
 
-pytestmark = pytest.mark.filterwarnings('ignore::notcallback.promise.UnhandledPromiseRejectionWarning')
+pytestmark = pytest.mark.filterwarnings('ignore::notcallback.exceptions.UnhandledPromiseRejectionWarning')
 
 
 def test_typecheck():
