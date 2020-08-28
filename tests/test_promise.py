@@ -98,7 +98,10 @@ def test_send():
 
     p = Promise(raise_on_truthy)
     p.send(None)
-    p.send(True)
+    try:
+        p.send(True)
+    except StopIteration:
+        pass
     Promise.resolve(p)
     assert p.state is REJECTED
     assert isinstance(p.value, ArithmeticError)
@@ -107,7 +110,10 @@ def test_send():
 def test_throw():
     p = Promise(simple_resolve)
     p.send(None)
-    p.throw(RuntimeError())
+    try:
+        p.throw(RuntimeError())
+    except StopIteration:
+        pass
     Promise.resolve(p)
     assert p.state is REJECTED
     assert isinstance(p.value, RuntimeError)

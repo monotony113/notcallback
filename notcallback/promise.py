@@ -24,13 +24,18 @@ from __future__ import annotations
 
 import warnings
 from collections import deque
-from collections.abc import Coroutine, Generator
 from contextlib import contextmanager
 from enum import Enum
 from functools import wraps
 from inspect import isgenerator, isgeneratorfunction
 from traceback import format_tb
 from typing import Any, Tuple
+
+try:
+    from .async_ import async_compatible
+except Exception:
+    def async_compatible(cls):
+        return cls
 
 
 class PromiseState(Enum):
@@ -49,7 +54,7 @@ REJECTED = PromiseState.REJECTED
 
 class _CachedGeneratorFunc:
 
-    class _CachedGenerator(Generator):
+    class _CachedGenerator:
         def __init__(self, func, *args, **kwargs):
             self._func = func
             self._result = None
@@ -61,6 +66,9 @@ class _CachedGeneratorFunc:
             else:
                 self._args = args
                 self._kwargs = kwargs
+
+        def __iter__(self):
+            return self
 
         def __next__(self):
             if not self._finished:
@@ -77,12 +85,26 @@ class _CachedGeneratorFunc:
         def send(self, value):
             if self._func_is_generator:
                 return self._func.send(value)
-            return super().send(value)
+            raise StopIteration(self._result)
 
         def throw(self, typ, val=None, tb=None):
             if self._func_is_generator:
                 return self._func.throw(typ, val=val, tb=tb)
-            return super().throw(typ, val=val, tb=tb)
+            if val is None:
+                if tb is None:
+                    raise typ
+                val = typ()
+            if tb is not None:
+                val = val.with_traceback(tb)
+            raise val
+
+        def close(self):
+            try:
+                self.throw(GeneratorExit)
+            except (GeneratorExit, StopIteration):
+                pass
+            else:
+                raise RuntimeError('Generator ignored GeneratorExit')
 
         @property
         def result(self):
@@ -126,15 +148,40 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-class Promise(Coroutine, Generator):
+@async_compatible
+class Promise:
     def __init__(self, executor):
         self._state: PromiseState = PENDING
         self._value: Any = None
-        self._exec: Generator = as_generator_func(executor)(self._make_resolution, self._make_rejection)
+
+        self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
+        self._hash = hash(self._exec)
 
         self._resolvers = deque()
 
-        self._in_progress = None
+        self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
+
+    @property
+    def state(self) -> PromiseState:
+        return self._state
+
+    @property
+    def value(self) -> Any:
+        if self._state is PENDING:
+            raise PromisePending()
+        return self._value
+
+    @property
+    def is_pending(self) -> bool:
+        return self._state is PENDING
+
+    @property
+    def is_fulfilled(self) -> bool:
+        return self._state is FULFILLED
+
+    @property
+    def is_rejected(self) -> bool:
+        return self._state is REJECTED
 
     def _add_resolver(self, resolver):
         self._resolvers.append(resolver)
@@ -169,12 +216,6 @@ class Promise(Coroutine, Generator):
         if other._state is REJECTED:
             yield from self._reject(other._value)
 
-    def _successor_executor(self, resolve, reject):
-        if self._state is PENDING:
-            yield from self
-        else:
-            yield from self._settle()
-
     @classmethod
     def _resolve_promise(cls, this: Promise, returned: Any):
         if this is returned:
@@ -190,55 +231,11 @@ class Promise(Coroutine, Generator):
 
         return (yield from this._resolve(returned))
 
-    @classmethod
-    def _resolve_promise_like(cls, this: Promise, obj):
-        calls: Tuple[PromiseState, Any] = []
-
-        def on_fulfill(val):
-            calls.append((FULFILLED, val))
-
-        def on_reject(reason):
-            calls.append((REJECTED, reason))
-
-        try:
-            promise = obj.then(on_fulfill, on_reject)
-            if isgenerator(obj):
-                yield from promise
-        except PromiseException:
-            raise
-        except Exception as e:
-            if not calls:
-                calls.append((REJECTED, e))
-        finally:
-            if not calls:
-                return (yield from this._resolve(obj))
-            state, value = calls[0]
-            if state is FULFILLED:
-                return (yield from this._resolve(value))
-            return (yield from this._reject(value))
-
-    def _begin_to(self, method=None, value=None):
-        if not self._in_progress:
-            self._in_progress = method(value)
-        return self._in_progress
-
-    @property
-    def state(self) -> PromiseState:
-        return self._state
-
-    @property
-    def value(self) -> Any:
+    def _successor_executor(self, resolve, reject):
         if self._state is PENDING:
-            raise PromisePending()
-        return self._value
-
-    @property
-    def is_pending(self) -> bool:
-        return self._state is PENDING
-
-    @property
-    def is_fulfilled(self) -> bool:
-        return self._state is FULFILLED
+            yield from self
+        else:
+            yield from self._settle()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
         promise = Promise(self._successor_executor)
@@ -299,48 +296,34 @@ class Promise(Coroutine, Generator):
     def all(cls, *promises) -> Promise:
         pass
 
+    def __iter__(self):
+        return self
+
     def __next__(self):
-        try:
-            if self._in_progress:
-                return next(self._in_progress)
-            return next(self._exec)
-        except (StopIteration, PromiseWarning):
-            raise
-        except Exception as e:
-            try:
-                return next(self._begin_to(self._reject, e))
-            except StopIteration:
-                pass
+        return self._dispatch_gen_method(self._exec.__next__)
 
     def send(self, value):
-        try:
-            if self._in_progress:
-                return self._in_progress.send(value)
-            return self._exec.send(value)
-        except (StopIteration, PromiseWarning):
-            raise
-        except Exception as e:
-            try:
-                return self._begin_to(self._reject, e).send(None)
-            except StopIteration:
-                pass
+        return self._dispatch_gen_method(self._exec.send, value)
 
     def throw(self, typ, val=None, tb=None):
+        return self._dispatch_gen_method(self._exec.throw, typ, val, tb)
+
+    def close(self):
         try:
-            if self._in_progress:
-                return self._in_progress.throw(typ, val, tb)
-            return self._exec.throw(typ, val, tb)
+            self.throw(GeneratorExit)
+        except (GeneratorExit, StopIteration):
+            pass
+        else:
+            raise RuntimeError('Generator ignored GeneratorExit')
+
+    def _dispatch_gen_method(self, func, *args, **kwargs):
+        try:
+            return func(*args, **kwargs)
         except (StopIteration, PromiseWarning):
             raise
         except Exception as e:
-            try:
-                return self._begin_to(self._reject, e).send(None)
-            except StopIteration:
-                pass
-
-    def __await__(self):
-        yield from self
-        return self._value
+            self._exec = self._reject(e)
+            return next(self._exec)
 
     def __eq__(self, value):
         return (
@@ -349,6 +332,9 @@ class Promise(Coroutine, Generator):
             and self._state is value._state
             and self._value == value._value
         )
+
+    def __hash__(self):
+        return hash((self.__class__, self._hash))
 
     def __str__(self):
         s1 = '<Promise at %s (%s)' % (hex(id(self)), self._state.value)
@@ -360,7 +346,38 @@ class Promise(Coroutine, Generator):
             return s1 + ' => ' + repr(self._value) + '>'
 
     def __repr__(self):
-        return '<Promise at %s (%s): %s>' % (hex(id(self)), self._state.value, repr(self._value))
+        return '<%s at %s (%s): %s>' % (self.__class__.__name__, hex(id(self)), self._state.value, repr(self._value))
+
+    @property
+    def __name__(self):
+        return self.__str__()
+
+    @classmethod
+    def _resolve_promise_like(cls, this: Promise, obj):
+        calls: Tuple[PromiseState, Any] = []
+
+        def on_fulfill(val):
+            calls.append((FULFILLED, val))
+
+        def on_reject(reason):
+            calls.append((REJECTED, reason))
+
+        try:
+            promise = obj.then(on_fulfill, on_reject)
+            if isgenerator(obj):
+                yield from promise
+        except PromiseException:
+            raise
+        except Exception as e:
+            if not calls:
+                calls.append((REJECTED, e))
+        finally:
+            if not calls:
+                return (yield from this._resolve(obj))
+            state, value = calls[0]
+            if state is FULFILLED:
+                return (yield from this._resolve(value))
+            return (yield from this._reject(value))
 
 
 class PromiseRejection(RuntimeError):
