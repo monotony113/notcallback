@@ -1,10 +1,9 @@
 import pytest
 
-from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 from notcallback.exceptions import PromiseRejection
+from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 
-from .suppliers import (exceptional_reject, incorrect_resolve, simple_reject,
-                        simple_resolve)
+from .suppliers import exceptional_reject, simple_reject, simple_resolve
 
 
 @pytest.mark.asyncio
@@ -35,11 +34,3 @@ async def test_async_exceptional_reject():
     with pytest.raises(RecursionError):
         await p
         assert p.state is REJECTED
-
-
-@pytest.mark.asyncio
-async def test_async_return_resolved():
-    p = Promise(incorrect_resolve)
-    v = await p
-    assert p.state is FULFILLED
-    assert v is True

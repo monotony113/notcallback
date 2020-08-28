@@ -46,7 +46,7 @@ class _CachedGeneratorFunc:
 
         def throw(self, typ, val=None, tb=None):
             if self._func_is_generator:
-                return self._func.throw(typ, val=val, tb=tb)
+                return self._func.throw(typ, val, tb)
             if val is None:
                 if tb is None:
                     raise typ

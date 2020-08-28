@@ -2,8 +2,8 @@ import random
 
 import pytest
 
-from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 from notcallback.exceptions import PromiseRejection
+from notcallback.promise import FULFILLED, PENDING, REJECTED, Promise
 
 from .suppliers import simple_resolve
 

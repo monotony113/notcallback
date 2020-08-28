@@ -34,12 +34,11 @@ def async_compatible(cls):
     def throw(self, typ, val=None, tb=None):
         return _as_async(_throw(self, typ, val, tb))
 
-    @classmethod
-    async def await_settle(cls, promise) -> Any:
-        return await promise
+    async def as_awaitable(self) -> Any:
+        return await self
 
     cls.__await__ = __await__
     cls.send = send
     cls.throw = throw
-    cls.await_settle = await_settle
+    cls.as_awaitable = as_awaitable
     return cls

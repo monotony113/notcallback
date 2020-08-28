@@ -86,10 +86,10 @@ class Promise:
     def _add_resolver(self, resolver):
         self._resolvers.append(resolver)
 
-    def _make_resolution(self, value):
+    def _make_resolution(self, value=None):
         yield from self._resolve_promise(self, value)
 
-    def _make_rejection(self, reason):
+    def _make_rejection(self, reason=None):
         yield from self._reject(reason)
 
     def _resolve(self, value):
