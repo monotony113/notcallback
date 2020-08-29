@@ -31,12 +31,6 @@ from .exceptions import (PromiseException, PromisePending, PromiseRejection,
                          PromiseWarning)
 from .utils import _CachedGeneratorFunc, as_generator_func
 
-try:
-    from .async_ import with_async_addons
-except Exception:
-    def with_async_addons(cls):
-        return cls
-
 
 def _passthrough(value):
     return value
@@ -48,7 +42,6 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@with_async_addons
 class Promise:
     def __init__(self, executor):
         self._state: PromiseState = PENDING
@@ -124,7 +117,7 @@ class Promise:
         if this is returned:
             raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
 
-        if isinstance(returned, Promise):
+        if isinstance(returned, cls):
             yield from returned
             yield from this._adopt(returned)
             return returned
@@ -141,13 +134,14 @@ class Promise:
             yield from self._run_resolvers()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
-        promise = Promise(self._successor_executor)
+        cls = self.__class__
+        promise = cls(self._successor_executor)
         handlers = {
             FULFILLED: _CachedGeneratorFunc(on_fulfill),
             REJECTED: _CachedGeneratorFunc(on_reject),
         }
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             try:
                 handler = handlers[settled._state](settled._value)
                 yield from handler
@@ -164,10 +158,11 @@ class Promise:
         return self.then(_passthrough, on_reject)
 
     def finally_(self, on_settle=lambda: None) -> Promise:
-        promise = Promise(self._successor_executor)
+        cls = self.__class__
+        promise = cls(self._successor_executor)
         on_settle = _CachedGeneratorFunc(on_settle)
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             try:
                 yield from on_settle()
                 yield from promise._adopt(self)
@@ -189,7 +184,7 @@ class Promise:
 
     @classmethod
     def settle(cls, promise: Promise) -> Promise:
-        if not isinstance(promise, Promise):
+        if not isinstance(promise, cls):
             raise TypeError(type(promise))
         for i in promise:
             pass
@@ -205,9 +200,9 @@ class Promise:
     @classmethod
     def all(cls, *promises) -> Promise:
         fulfillments = {}
-        promise = Promise(cls._multi_successors_executor(promises))
+        promise = cls(cls._multi_successors_executor(promises))
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             if promise._state is not PENDING:
                 yield from promise._run_resolvers()
             if settled._state is REJECTED:
@@ -223,9 +218,9 @@ class Promise:
 
     @classmethod
     def race(cls, *promises):
-        promise = Promise(cls._multi_successors_executor(promises))
+        promise = cls(cls._multi_successors_executor(promises))
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             if promise._state is not PENDING:
                 yield from promise._run_resolvers()
             yield from promise._adopt(settled)
@@ -317,23 +312,17 @@ class Promise:
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
 
-    def awaitable(self):
-        raise NotImplementedError()
+    def _not_async(self, *args, **kwargs):
+        raise NotImplementedError(
+            '%s is not async-compatible.\n'
+            'To enable async functionaly, use notcallback.async_.Promise'
+            % (repr(self.__class__)),
+        )
 
-    def __await__(self):
-        raise NotImplementedError()
-
-    def __aiter__(self):
-        raise NotImplementedError()
-
-    def __anext__(self):
-        raise NotImplementedError()
-
-    def asend(self, val):
-        raise NotImplementedError()
-
-    def athrow(self, typ, val=None, tb=None):
-        raise NotImplementedError()
-
-    def aclose(self):
-        raise NotImplementedError()
+    awaitable = _not_async
+    __await__ = _not_async
+    __aiter__ = _not_async
+    __anext__ = _not_async
+    asend = _not_async
+    athrow = _not_async
+    aclose = _not_async

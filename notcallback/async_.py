@@ -24,10 +24,12 @@ import asyncio
 from typing import Any
 
 from .exceptions import PromiseRejection, PromiseWarning
+from .promise import Promise as BasePromise
 
 
-def with_async_addons(cls):
-    def _ensure_future(item):
+class Promise(BasePromise):
+    @classmethod
+    def _ensure_future(cls, item):
         try:
             return asyncio.ensure_future(item)
         except TypeError:
@@ -36,8 +38,11 @@ def with_async_addons(cls):
             return future
 
     def __await__(self):
+        return self.awaitable().__await__()
+
+    async def awaitable(self) -> Any:
         for i in self:
-            yield from _ensure_future(i)
+            await self._ensure_future(i)
         if self.is_fulfilled:
             return self._value
         elif self.is_rejected:
@@ -45,9 +50,6 @@ def with_async_addons(cls):
             if isinstance(reason, BaseException):
                 raise reason
             raise PromiseRejection(reason)
-
-    def __aiter__(self):
-        return self
 
     async def _dispatch_async_gen_method(self, func, *args, **kwargs):
         try:
@@ -65,6 +67,9 @@ def with_async_addons(cls):
         except Exception as e:
             return await self.athrow(e)
 
+    def __aiter__(self):
+        return self
+
     async def __anext__(self):
         return await self._dispatch_async_gen_method(self._exec.__next__)
 
@@ -79,8 +84,7 @@ def with_async_addons(cls):
             i = await self.athrow(GeneratorExit)
             while True:
                 try:
-                    a = asyncio.ensure_future(i)
-                    await a
+                    await asyncio.ensure_future(i)
                 except TypeError:
                     raise RuntimeError('Generator cannot yield non-awaitables during exit.')
                 i = await self.__anext__()
@@ -88,17 +92,3 @@ def with_async_addons(cls):
             pass
         else:
             raise RuntimeError('Generator ignored GeneratorExit')
-
-    async def awaitable(self) -> Any:
-        return await self
-
-    cls.awaitable = awaitable
-    cls._dispatch_async_gen_method = _dispatch_async_gen_method
-    cls.__await__ = __await__
-    cls.__aiter__ = __aiter__
-    cls.__anext__ = __anext__
-    cls.asend = asend
-    cls.athrow = athrow
-    cls.aclose = aclose
-
-    return cls

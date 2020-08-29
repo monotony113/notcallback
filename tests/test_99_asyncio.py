@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from notcallback import Promise
+from notcallback.async_ import Promise
 
 LEEWAY = 1.014
 
