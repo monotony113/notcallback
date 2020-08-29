@@ -123,3 +123,59 @@ def test_throw():
     Promise.resolve(p)
     assert p.state is REJECTED
     assert p.is_rejected_due_to(RuntimeError)
+
+
+def test_throw_catch():
+    p = Promise(simple_resolve).catch(lambda e: repr(e))
+    p.send(None)
+    try:
+        p.throw(RuntimeError())
+    except StopIteration:
+        pass
+    Promise.resolve(p)
+    assert p.state is FULFILLED
+    assert p.value == repr(RuntimeError())
+
+
+def test_close():
+    p = Promise(simple_resolve)
+    p.catch(lambda e: repr(e))
+    p.send(None)
+    p.close()
+    assert p.state is PENDING
+
+
+def test_close_cleanup():
+    values = {}
+
+    def cleanup(resolve, reject):
+        try:
+            yield 40
+            yield from resolve(41)
+        finally:
+            values['key'] = 42
+
+    p = Promise(cleanup)
+    p.send(None)
+    p.close()
+
+    assert p.state is PENDING
+    assert values['key'] == 42
+
+
+def test_close_inproper_cleanup():
+    values = {}
+
+    def cleanup(resolve, reject):
+        try:
+            yield 40
+            yield from resolve(41)
+        finally:
+            yield 43
+            values['key'] = 42
+
+    p = Promise(cleanup)
+    p.send(None)
+
+    with pytest.raises(RuntimeError):
+        p.close()

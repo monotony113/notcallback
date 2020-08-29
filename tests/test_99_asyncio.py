@@ -55,7 +55,7 @@ async def test_concurrent_await():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason='Time-consuming')
+# @pytest.mark.skip(reason='Time-consuming')
 async def test_rand():
     # Worse version of https://realpython.com/async-io-python/#the-asyncio-package-and-asyncawait
     import random

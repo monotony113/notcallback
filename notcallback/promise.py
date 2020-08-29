@@ -317,8 +317,23 @@ class Promise:
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
 
+    def awaitable(self):
+        raise NotImplementedError()
+
     def __await__(self):
         raise NotImplementedError()
 
-    def awaitable(self):
+    def __aiter__(self):
+        raise NotImplementedError()
+
+    def __anext__(self):
+        raise NotImplementedError()
+
+    def asend(self, val):
+        raise NotImplementedError()
+
+    def athrow(self, typ, val=None, tb=None):
+        raise NotImplementedError()
+
+    def aclose(self):
         raise NotImplementedError()

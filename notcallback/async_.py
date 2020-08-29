@@ -23,11 +23,11 @@
 import asyncio
 from typing import Any
 
-from .exceptions import PromiseRejection
+from .exceptions import PromiseRejection, PromiseWarning
 
 
 def with_async_addons(cls):
-    def _as_async(item):
+    def _ensure_future(item):
         try:
             return asyncio.ensure_future(item)
         except TypeError:
@@ -37,7 +37,7 @@ def with_async_addons(cls):
 
     def __await__(self):
         for i in self:
-            yield from _as_async(i)
+            yield from _ensure_future(i)
         if self.is_fulfilled:
             return self._value
         elif self.is_rejected:
@@ -46,10 +46,59 @@ def with_async_addons(cls):
                 raise reason
             raise PromiseRejection(reason)
 
+    def __aiter__(self):
+        return self
+
+    async def _dispatch_async_gen_method(self, func, *args, **kwargs):
+        try:
+            item = self._dispatch_gen_method(func, *args, **kwargs)
+        except StopIteration:
+            raise StopAsyncIteration()
+        try:
+            future = asyncio.ensure_future(item)
+        except TypeError:
+            return item
+        try:
+            return await self.asend(await future)
+        except (GeneratorExit, StopAsyncIteration, PromiseWarning):
+            raise
+        except Exception as e:
+            return await self.athrow(e)
+
+    async def __anext__(self):
+        return await self._dispatch_async_gen_method(self._exec.__next__)
+
+    async def asend(self, val):
+        return await self._dispatch_async_gen_method(self._exec.send, val)
+
+    async def athrow(self, typ, val=None, tb=None):
+        return await self._dispatch_async_gen_method(self._exec.throw, typ, val, tb)
+
+    async def aclose(self):
+        try:
+            i = await self.athrow(GeneratorExit)
+            while True:
+                try:
+                    a = asyncio.ensure_future(i)
+                    await a
+                except TypeError:
+                    raise RuntimeError('Generator cannot yield non-awaitables during exit.')
+                i = await self.__anext__()
+        except (GeneratorExit, StopAsyncIteration):
+            pass
+        else:
+            raise RuntimeError('Generator ignored GeneratorExit')
+
     async def awaitable(self) -> Any:
         return await self
 
-    cls.__await__ = __await__
     cls.awaitable = awaitable
+    cls._dispatch_async_gen_method = _dispatch_async_gen_method
+    cls.__await__ = __await__
+    cls.__aiter__ = __aiter__
+    cls.__anext__ = __anext__
+    cls.asend = asend
+    cls.athrow = athrow
+    cls.aclose = aclose
 
     return cls
