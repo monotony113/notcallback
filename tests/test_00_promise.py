@@ -48,7 +48,7 @@ def test_exceptional_reject():
     for _ in p:
         pass
     assert p.state is REJECTED
-    assert isinstance(p.value, RecursionError)
+    assert p.is_rejected_due_to(RecursionError)
 
 
 def test_incorrect_resolve():
@@ -84,7 +84,19 @@ def test_multiple_settles():
 #         p._state = FULFILLED
 
 
-def test_send():
+def test_send_resolve():
+    p = Promise(simple_resolve)
+    for i in (1, 3):
+        j = p.send(None)
+        assert i == j
+    try:
+        p.send(None)
+    except StopIteration:
+        pass
+    assert p.state is FULFILLED
+
+
+def test_send_reject():
     def raise_on_truthy(resolve, reject):
         if (yield 1):
             raise ArithmeticError()
@@ -98,7 +110,7 @@ def test_send():
         pass
     Promise.resolve(p)
     assert p.state is REJECTED
-    assert isinstance(p.value, ArithmeticError)
+    assert p.is_rejected_due_to(ArithmeticError)
 
 
 def test_throw():
@@ -110,4 +122,4 @@ def test_throw():
         pass
     Promise.resolve(p)
     assert p.state is REJECTED
-    assert isinstance(p.value, RuntimeError)
+    assert p.is_rejected_due_to(RuntimeError)

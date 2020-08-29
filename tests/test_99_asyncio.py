@@ -41,7 +41,7 @@ async def test_concurrent_await():
 
     promises = [Promise(create_timer(i)).then(end) for i in range(count)]
 
-    await asyncio.gather(*[p.as_awaitable() for p in promises])
+    await asyncio.gather(*[p.awaitable() for p in promises])
 
     for p in promises:
         assert p.is_fulfilled
@@ -55,11 +55,12 @@ async def test_concurrent_await():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason='Time-consuming')
 async def test_rand():
     # Worse version of https://realpython.com/async-io-python/#the-asyncio-package-and-asyncawait
     import random
 
-    # random.seed(444)
+    random.seed(444)
     # ANSI colors
     c = (
         '\033[0m',   # End of color
@@ -98,7 +99,7 @@ async def test_rand():
 
     promises = [makerandom(i, 10 - i - 1) for i in range(3)]
     start = time.perf_counter()
-    results = dict(await asyncio.gather(*(p.as_awaitable() for p in promises)))
+    results = dict(await asyncio.gather(*(p.awaitable() for p in promises)))
 
     assert time.perf_counter() - start < max(expected_wait_times.values()) * LEEWAY
     for k in conf:

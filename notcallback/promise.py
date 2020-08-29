@@ -32,9 +32,9 @@ from .exceptions import (PromiseException, PromisePending, PromiseRejection,
 from .utils import _CachedGeneratorFunc, as_generator_func
 
 try:
-    from .async_ import async_compatible
+    from .async_ import with_async_addons
 except Exception:
-    def async_compatible(cls):
+    def with_async_addons(cls):
         return cls
 
 
@@ -48,7 +48,7 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@async_compatible
+@with_async_addons
 class Promise:
     def __init__(self, executor):
         self._state: PromiseState = PENDING
@@ -83,6 +83,9 @@ class Promise:
     def is_rejected(self) -> bool:
         return self._state is REJECTED
 
+    def is_rejected_due_to(self, exc_class) -> bool:
+        return self._state is REJECTED and isinstance(self._value, exc_class)
+
     def _add_resolver(self, resolver):
         self._resolvers.append(resolver)
 
@@ -96,7 +99,7 @@ class Promise:
         if self._state is PENDING:
             self._state = FULFILLED
             self._value = value
-        yield from self._settle()
+        yield from self._run_resolvers()
 
     def _reject(self, reason):
         if self._state is PENDING:
@@ -104,9 +107,9 @@ class Promise:
             if isinstance(reason, PromiseRejection):
                 reason = reason.value
             self._value = reason
-        yield from self._settle()
+        yield from self._run_resolvers()
 
-    def _settle(self):
+    def _run_resolvers(self):
         while self._resolvers:
             yield from self._resolvers.popleft()(self)
 
@@ -131,11 +134,11 @@ class Promise:
 
         return (yield from this._resolve(returned))
 
-    def _successor_executor(self, resolve, reject):
+    def _successor_executor(self, resolve=None, reject=None):
         if self._state is PENDING:
             yield from self
         else:
-            yield from self._settle()
+            yield from self._run_resolvers()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
         promise = Promise(self._successor_executor)
@@ -193,8 +196,43 @@ class Promise:
         return promise
 
     @classmethod
+    def _multi_successors_executor(cls, promises):
+        def executor(resolve, reject):
+            for p in promises:
+                yield from p._successor_executor()
+        return executor
+
+    @classmethod
     def all(cls, *promises) -> Promise:
-        pass
+        fulfillments = {}
+        promise = Promise(cls._multi_successors_executor(promises))
+
+        def resolver(settled: Promise):
+            if promise._state is not PENDING:
+                yield from promise._run_resolvers()
+            if settled._state is REJECTED:
+                yield from promise._reject(settled._value)
+            fulfillments[settled] = settled._value
+            if len(fulfillments) == len(promises):
+                results = [fulfillments[p] for p in promises]
+                yield from promise._resolve(results)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
+
+    @classmethod
+    def race(cls, *promises):
+        promise = Promise(cls._multi_successors_executor(promises))
+
+        def resolver(settled: Promise):
+            if promise._state is not PENDING:
+                yield from promise._run_resolvers()
+            yield from promise._adopt(settled)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
 
     def __iter__(self):
         return self
@@ -278,3 +316,9 @@ class Promise:
             if state is FULFILLED:
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
+
+    def __await__(self):
+        raise NotImplementedError()
+
+    def awaitable(self):
+        raise NotImplementedError()
