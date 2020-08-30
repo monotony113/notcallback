@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections import deque
 from inspect import isgenerator
-from typing import Any, Tuple
+from typing import Any, Generator, Tuple
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseException, PromisePending, PromiseRejection,
@@ -47,12 +47,17 @@ class Promise:
         self._state: PromiseState = PENDING
         self._value: Any = None
 
-        self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
-        self._hash = hash(self._exec)
+        self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
+
+        self._exec: Generator
+        self._hash: int
+        self._prepare(executor)
 
         self._resolvers = deque()
 
-        self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
+    def _prepare(self, executor):
+        self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
+        self._hash = hash(self._exec)
 
     @property
     def state(self) -> PromiseState:
@@ -67,6 +72,10 @@ class Promise:
     @property
     def is_pending(self) -> bool:
         return self._state is PENDING
+
+    @property
+    def is_settled(self) -> bool:
+        return self._state is not PENDING
 
     @property
     def is_fulfilled(self) -> bool:
@@ -194,7 +203,10 @@ class Promise:
     def _multi_successors_executor(cls, promises):
         def executor(resolve, reject):
             for p in promises:
-                yield from p._successor_executor()
+                try:
+                    yield from p._successor_executor()
+                except GeneratorExit:
+                    raise StopIteration
         return executor
 
     @classmethod
@@ -204,13 +216,15 @@ class Promise:
 
         def resolver(settled: cls):
             if promise._state is not PENDING:
-                yield from promise._run_resolvers()
+                return
             if settled._state is REJECTED:
                 yield from promise._reject(settled._value)
+                raise GeneratorExit
             fulfillments[settled] = settled._value
             if len(fulfillments) == len(promises):
                 results = [fulfillments[p] for p in promises]
                 yield from promise._resolve(results)
+                raise GeneratorExit
 
         for p in promises:
             p._add_resolver(resolver)
@@ -222,8 +236,9 @@ class Promise:
 
         def resolver(settled: cls):
             if promise._state is not PENDING:
-                yield from promise._run_resolvers()
+                return
             yield from promise._adopt(settled)
+            raise GeneratorExit
 
         for p in promises:
             p._add_resolver(resolver)
@@ -315,7 +330,7 @@ class Promise:
     def _not_async(self, *args, **kwargs):
         raise NotImplementedError(
             '%s is not async-compatible.\n'
-            'To enable async functionaly, use notcallback.async_.Promise'
+            'To enable async functionality, use notcallback.async_.Promise'
             % (repr(self.__class__)),
         )
 
