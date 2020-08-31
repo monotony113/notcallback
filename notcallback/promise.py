@@ -215,7 +215,7 @@ class Promise:
     @classmethod
     def all(cls, *promises) -> Promise:
         fulfillments = {}
-        promise = cls(cls._make_multi_executor(promises), named='all')
+        promise = cls(cls._make_multi_executor(promises), named='Promise.all')
 
         def resolver(settled: cls):
             if settled._state is REJECTED:
@@ -231,10 +231,25 @@ class Promise:
 
     @classmethod
     def race(cls, *promises):
-        promise = cls(cls._make_multi_executor(promises), named='race')
+        promise = cls(cls._make_multi_executor(promises), named='Promise.race')
 
         def resolver(settled: cls):
             yield from promise._adopt(settled)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
+
+    @classmethod
+    def all_settled(cls, *promises):
+        outcomes = {}
+        promise = cls(cls._make_multi_executor(promises), named='Promise.all_settled')
+
+        def resolver(settled: cls):
+            outcomes[settled] = settled._value
+            if len(outcomes) == len(promises):
+                results = [outcomes[p] for p in promises]
+                yield from promise._resolve(results)
 
         for p in promises:
             p._add_resolver(resolver)

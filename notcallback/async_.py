@@ -26,7 +26,7 @@ import asyncio
 import warnings
 from typing import Any
 
-from .exceptions import AsyncPromiseWarning, PromiseRejection, PromiseWarning, StopEarly
+from .exceptions import AsyncPromiseWarning, PromiseException, PromiseRejection, PromiseWarning
 from .promise import Promise as BasePromise
 from .utils import one_line_warning_format
 
@@ -66,17 +66,18 @@ class Promise(BasePromise):
             ))
 
     @classmethod
-    async def _async_cancellable(cls, promise, futures):
+    async def _ensure_completion(cls, promise):
         try:
-            return await promise
-        except StopEarly:
-            for f in futures:
-                f.cancel()
+            return await promise.awaitable()
+        except PromiseException:
+            raise
+        except Exception:
+            pass
 
     @classmethod
     def _make_concurrent_executor(cls, this: Promise, promises):
         def executor(resolve, reject):
-            futures = [asyncio.ensure_future(p.awaitable()) for p in promises]
+            futures = [asyncio.ensure_future(cls._ensure_completion(p)) for p in promises]
             awaitables = asyncio.as_completed(futures)
             yield from awaitables
         return executor
@@ -96,6 +97,10 @@ class Promise(BasePromise):
     @classmethod
     def race(cls, *args, **kwargs):
         return cls._dispatch_aggregate_methods(super().race, *args, **kwargs)
+
+    @classmethod
+    def all_settled(cls, *args, **kwargs):
+        return cls._dispatch_aggregate_methods(super().all_settled, *args, **kwargs)
 
     async def _dispatch_async_gen_method(self, func, *args, **kwargs):
         try:

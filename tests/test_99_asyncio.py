@@ -152,6 +152,54 @@ async def test_rand_all():
 
 @pytest.mark.asyncio
 # @pytest.mark.skip(reason='Time-consuming')
+async def test_all_reject_one():
+    splits = {}
+
+    def wait(s):
+        def e(r, _):
+            yield asyncio.sleep(s)
+            yield from r(s)
+        return e
+
+    def record(k):
+        splits[k] = time.perf_counter()
+        return k
+
+    def throw(_):
+        raise BlockingIOError
+
+    num = [random.randint(0, 10) for i in range(5)]
+    promises = [
+        *[Promise(wait(i)).then(record) for i in num[:2]],
+        Promise(wait(num[2])).then(throw),
+        *[Promise(wait(i)).then(record) for i in num[3:]],
+    ]
+
+    p = Promise.all(*promises, concurrently=True)
+    p.catch(lambda _: record('err'))
+
+    t = timer()
+    start = next(t)
+    try:
+        with pytest.raises(BlockingIOError):
+            await p
+    except BlockingIOError:
+        pass
+    duration = next(t)
+    splits = {k: v - start for k, v in splits.items()}
+
+    assert p.is_rejected_due_to(BlockingIOError)
+
+    latest = max(num)
+    assert on_time(splits['err'], num[2], precision=3)
+    assert on_time(duration, latest, precision=3)
+    for k, v in splits.items():
+        if isinstance(k, int):
+            assert on_time(v, k, precision=3)
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
 async def test_race_resolve():
     splits = {}
 
@@ -168,20 +216,63 @@ async def test_race_resolve():
     num = [random.randint(0, 10) for i in range(5)]
     promises = [Promise(wait(i)).then(record) for i in num]
 
-    p = Promise.race(*promises, concurrently=True).then(lambda _: record('1st'))
+    p = Promise.race(*promises, concurrently=True)
+    p.then(lambda _: record('1st'))
 
     t = timer()
     start = next(t)
-    await p
+    result = await p
     duration = next(t)
     splits = {k: v - start for k, v in splits.items()}
 
     assert p.is_fulfilled
 
-    shortest = min(num)
-    longest = max(num)
-    assert on_time(splits['1st'], shortest, precision=3)
-    assert on_time(duration, longest, precision=3)
+    earliest = min(num)
+    latest = max(num)
+    assert result == earliest
+    assert on_time(splits['1st'], earliest, precision=3)
+    assert on_time(duration, latest, precision=3)
     for k, v in splits.items():
         if isinstance(k, int):
             assert on_time(v, k, precision=3)
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
+async def test_race_reject():
+    def wait(s):
+        def e(r, _):
+            yield asyncio.sleep(s)
+            yield from r(s)
+        return e
+
+    def r(_):
+        raise EOFError
+
+    num = [random.randint(0, 10) for i in range(5)]
+    promises = [Promise(wait(i)) for i in num]
+
+    earliest = min(num)
+    index = num.index(earliest)
+    promises[index] = promises[index].then(r)
+
+    p = Promise.race(*promises, concurrently=True)
+
+    t = timer()
+    next(t)
+    try:
+        with pytest.raises(EOFError):
+            await p
+    except EOFError:
+        pass
+
+    duration = next(t)
+    latest = max(num)
+    assert on_time(duration, latest, precision=3)
+
+    assert p.is_rejected_due_to(EOFError)
+    for i in range(5):
+        if i == index:
+            assert promises[i].is_rejected_due_to(EOFError)
+        else:
+            assert promises[i].is_fulfilled
