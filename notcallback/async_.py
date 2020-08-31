@@ -26,7 +26,8 @@ import asyncio
 import warnings
 from typing import Any
 
-from .exceptions import AsyncPromiseWarning, PromiseException, PromiseRejection, PromiseWarning
+from .exceptions import (AsyncPromiseWarning, PromiseException,
+                         PromiseRejection, PromiseWarning)
 from .promise import Promise as BasePromise
 from .utils import one_line_warning_format
 
@@ -61,7 +62,7 @@ class Promise(BasePromise):
             raise PromiseRejection(reason)
         with one_line_warning_format():
             warnings.warn(AsyncPromiseWarning(
-                'Future is done but promise was not settled:\n%s'
+                'Future is done but Promise was not settled:\n%s'
                 % self.__str__(),
             ))
 
@@ -101,6 +102,10 @@ class Promise(BasePromise):
     @classmethod
     def all_settled(cls, *args, **kwargs):
         return cls._dispatch_aggregate_methods(super().all_settled, *args, **kwargs)
+
+    @classmethod
+    def any(cls, *args, **kwargs):
+        return cls._dispatch_aggregate_methods(super().any, *args, **kwargs)
 
     async def _dispatch_async_gen_method(self, func, *args, **kwargs):
         try:

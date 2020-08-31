@@ -31,6 +31,11 @@ class PromiseRejection(RuntimeError):
         return self.__class__.__name__ + ': ' + str(self.value)
 
 
+class PromiseAggregateError(RuntimeError):
+    def __str__(self):
+        return self.__class__.__name__ + ': No Promise in Promise.any was resolved.'
+
+
 class StopEarly(GeneratorExit):
     pass
 
@@ -69,7 +74,7 @@ class UnhandledPromiseRejectionWarning(PromiseWarning):
 
     def _print_warning(self):
         reason = self.reason
-        warn = self.__class__.__name__ + ': Unhandled promise rejection: '
+        warn = self.__class__.__name__ + ': Unhandled Promise rejection: '
         if isinstance(reason, BaseException):
             tb = format_tb(reason.__traceback__)
             return (

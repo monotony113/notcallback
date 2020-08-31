@@ -27,8 +27,8 @@ from inspect import isgenerator
 from typing import Any, Generator, Tuple
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
-from .exceptions import (PromiseException, PromisePending, PromiseRejection,
-                         PromiseWarning)
+from .exceptions import (PromiseAggregateError, PromiseException,
+                         PromisePending, PromiseRejection, PromiseWarning)
 from .utils import _CachedGeneratorFunc, as_generator_func
 
 
@@ -242,14 +242,31 @@ class Promise:
 
     @classmethod
     def all_settled(cls, *promises):
-        settled_count = 0
+        settle_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.all_settled')
 
         def resolver(settled: cls):
-            nonlocal settled_count
-            settled_count += 1
-            if settled_count == len(promises):
+            nonlocal settle_count
+            settle_count += 1
+            if settle_count == len(promises):
                 yield from promise._resolve(promises)
+
+        for p in promises:
+            p._add_resolver(resolver)
+        return promise
+
+    @classmethod
+    def any(cls, *promises):
+        settle_count = 0
+        promise = cls(cls._make_multi_executor(promises), named='Promise.any')
+
+        def resolver(settled: cls):
+            nonlocal settle_count
+            settle_count += 1
+            if settled._state is FULFILLED:
+                yield from promise._adopt(settled)
+            if settle_count == len(promises) and promise.is_pending:
+                yield from promise._reject(PromiseAggregateError())
 
         for p in promises:
             p._add_resolver(resolver)

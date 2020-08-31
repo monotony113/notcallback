@@ -6,10 +6,11 @@ import time
 import pytest
 
 from notcallback.async_ import Promise
+from notcallback.exceptions import PromiseAggregateError
 
 LEEWAY = 1.014
 # SEED = random.randrange(sys.maxsize)
-SEED = 7914905441759771169
+SEED = 8848235470363262384
 RNG = random.Random(SEED)
 print(f'RNG seed: {SEED}')
 
@@ -20,7 +21,7 @@ def timer():
     yield time.perf_counter() - start
 
 
-def on_time(timed, expected, *, precision=4):
+def on_time(timed, expected, *, precision=3):
     precision = 10 ** precision
     timed = int(timed * precision) / precision
     return timed >= expected and timed <= expected * LEEWAY
@@ -168,7 +169,7 @@ async def test_all_reject_one():
     def throw(_):
         raise BlockingIOError
 
-    num = [random.randint(0, 10) for i in range(5)]
+    num = [RNG.randint(0, 10) for i in range(5)]
     promises = [
         *[Promise(wait(i)).then(record) for i in num[:2]],
         Promise(wait(num[2])).then(throw),
@@ -191,11 +192,11 @@ async def test_all_reject_one():
     assert p.is_rejected_due_to(BlockingIOError)
 
     latest = max(num)
-    assert on_time(splits['err'], num[2], precision=3)
-    assert on_time(duration, latest, precision=3)
+    assert on_time(splits['err'], num[2])
+    assert on_time(duration, latest)
     for k, v in splits.items():
         if isinstance(k, int):
-            assert on_time(v, k, precision=3)
+            assert on_time(v, k)
 
 
 @pytest.mark.asyncio
@@ -213,7 +214,7 @@ async def test_race_resolve():
         splits[k] = time.perf_counter()
         return k
 
-    num = [random.randint(0, 10) for i in range(5)]
+    num = [RNG.randint(0, 10) for i in range(5)]
     promises = [Promise(wait(i)).then(record) for i in num]
 
     p = Promise.race(*promises, concurrently=True)
@@ -230,11 +231,11 @@ async def test_race_resolve():
     earliest = min(num)
     latest = max(num)
     assert result == earliest
-    assert on_time(splits['1st'], earliest, precision=3)
-    assert on_time(duration, latest, precision=3)
+    assert on_time(splits['1st'], earliest)
+    assert on_time(duration, latest)
     for k, v in splits.items():
         if isinstance(k, int):
-            assert on_time(v, k, precision=3)
+            assert on_time(v, k)
 
 
 @pytest.mark.asyncio
@@ -249,7 +250,7 @@ async def test_race_reject():
     def r(_):
         raise EOFError
 
-    num = [random.randint(0, 10) for i in range(5)]
+    num = [RNG.randint(0, 10) for i in range(5)]
     promises = [Promise(wait(i)) for i in num]
 
     earliest = min(num)
@@ -268,7 +269,7 @@ async def test_race_reject():
 
     duration = next(t)
     latest = max(num)
-    assert on_time(duration, latest, precision=3)
+    assert on_time(duration, latest)
 
     assert p.is_rejected_due_to(EOFError)
     for i in range(5):
@@ -279,6 +280,7 @@ async def test_race_reject():
 
 
 @pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
 async def test_all_settled():
     def task1(r, _):
         yield from r(100)
@@ -302,6 +304,75 @@ async def test_all_settled():
         assert results[2].value == .5
         assert results[3].is_rejected_due_to(BufferError)
 
-    p = Promise.all_settled(*[Promise(t) for t in [task1, task2, task3, task4]]).then(check)
+    p = Promise.all_settled(*[Promise(t) for t in [task1, task2, task3, task4]], concurrently=True).then(check)
     await p
     assert p.is_fulfilled
+
+
+@pytest.mark.asyncio
+async def test_any():
+    splits = {}
+
+    def wait(s):
+        def e(r, _):
+            yield asyncio.sleep(s)
+            yield from r(s)
+        return e
+
+    def record(k):
+        splits[k] = time.perf_counter()
+        return k
+
+    num = sorted(RNG.randint(0, 10) for i in range(5))
+    promises = [
+        Promise(wait(num[0])).then(lambda _: Promise.reject(_)),
+        *[Promise(wait(i)).then(record) for i in num[1:]],
+    ]
+
+    p = Promise.any(*promises, concurrently=True)
+    p.then(lambda _: record('found'))
+
+    t = timer()
+    start = next(t)
+    result = await p
+    duration = next(t)
+    splits = {k: v - start for k, v in splits.items()}
+
+    assert p.is_fulfilled
+
+    latest = max(num)
+    assert result == num[1]
+    assert on_time(splits['found'], num[1])
+    assert on_time(duration, latest)
+    for k, v in splits.items():
+        if isinstance(k, int):
+            assert on_time(v, k)
+
+
+@pytest.mark.asyncio
+async def test_any_no_resolve():
+
+    def wait(s):
+        def e(_, r):
+            yield asyncio.sleep(s)
+            yield from r(s)
+        return e
+
+    num = [RNG.randint(0, 10) for i in range(5)]
+    promises = [Promise(wait(i)) for i in num]
+
+    p = Promise.any(*promises, concurrently=True)
+
+    t = timer()
+    next(t)
+    try:
+        with pytest.raises(PromiseAggregateError):
+            await p
+    except PromiseAggregateError:
+        pass
+    duration = next(t)
+
+    assert p.is_rejected_due_to(PromiseAggregateError)
+
+    latest = max(num)
+    assert on_time(duration, latest)

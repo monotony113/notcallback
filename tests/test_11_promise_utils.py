@@ -1,6 +1,7 @@
 import random
 
 from notcallback import Promise
+from notcallback.exceptions import PromiseAggregateError
 
 
 def test_all_resolved():
@@ -116,3 +117,44 @@ def test_all_settled():
     p = Promise.all_settled(*[Promise(t) for t in [task1, task2, task3]]).then(check)
     Promise.settle(p)
     assert p.is_fulfilled
+
+
+def test_any():
+    resolution_order = []
+
+    def record(item):
+        resolution_order.append(item)
+        return item
+
+    num = [random.randint(0, 100) for i in range(5)]
+    promises = [
+        *[Promise.reject(i).then(record) for i in num[:2]],
+        Promise.resolve(num[2]).then(record),
+        *[Promise.resolve(i).then(record) for i in num[3:]],
+    ]
+
+    p = Promise.any(*promises)
+    p.then(lambda _: record('1st_resolved'))
+    Promise.settle(p)
+
+    assert p.is_fulfilled
+    assert p.value == num[2]
+
+    expected_order = num[2:3] + ['1st_resolved'] + num[3:]
+    assert all(i == j for i, j in zip(resolution_order, expected_order))
+
+
+def test_any_no_resolve():
+    resolution_order = []
+
+    def record(item):
+        resolution_order.append(item)
+        return item
+
+    num = [random.randint(0, 100) for i in range(5)]
+    promises = [Promise.reject(i).then(record) for i in num]
+
+    p = Promise.any(*promises)
+    Promise.settle(p)
+
+    assert p.is_rejected_due_to(PromiseAggregateError)
