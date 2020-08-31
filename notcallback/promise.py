@@ -24,18 +24,12 @@ from __future__ import annotations
 
 from collections import deque
 from inspect import isgenerator
-from typing import Any, Tuple
+from typing import Any, Generator, Tuple
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseException, PromisePending, PromiseRejection,
-                         PromiseWarning)
+                         PromiseWarning, StopEarly)
 from .utils import _CachedGeneratorFunc, as_generator_func
-
-try:
-    from .async_ import with_async_addons
-except Exception:
-    def with_async_addons(cls):
-        return cls
 
 
 def _passthrough(value):
@@ -48,18 +42,25 @@ def _reraise(exc):
     raise PromiseRejection(exc)
 
 
-@with_async_addons
 class Promise:
-    def __init__(self, executor):
+    def __init__(self, executor, *, named=None):
         self._state: PromiseState = PENDING
         self._value: Any = None
 
-        self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
-        self._hash = hash(self._exec)
+        self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
+
+        self._exec: Generator
+        self._hash: int
+        self._name: str = None
+        self._prepare(executor, named)
 
         self._resolvers = deque()
 
-        self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
+    def _prepare(self, executor, named=None):
+        self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
+        self._hash = hash(self._exec)
+        if not self._name or named:
+            self._name = named or executor.__name__
 
     @property
     def state(self) -> PromiseState:
@@ -74,6 +75,10 @@ class Promise:
     @property
     def is_pending(self) -> bool:
         return self._state is PENDING
+
+    @property
+    def is_settled(self) -> bool:
+        return self._state is not PENDING
 
     @property
     def is_fulfilled(self) -> bool:
@@ -124,7 +129,7 @@ class Promise:
         if this is returned:
             raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
 
-        if isinstance(returned, Promise):
+        if isinstance(returned, cls):
             yield from returned
             yield from this._adopt(returned)
             return returned
@@ -141,13 +146,17 @@ class Promise:
             yield from self._run_resolvers()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
-        promise = Promise(self._successor_executor)
+        cls = self.__class__
+        promise = cls(
+            self._successor_executor,
+            named='%s|%s,%s' % (self._name, on_fulfill.__name__, on_reject.__name__),
+        )
         handlers = {
             FULFILLED: _CachedGeneratorFunc(on_fulfill),
             REJECTED: _CachedGeneratorFunc(on_reject),
         }
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             try:
                 handler = handlers[settled._state](settled._value)
                 yield from handler
@@ -164,10 +173,11 @@ class Promise:
         return self.then(_passthrough, on_reject)
 
     def finally_(self, on_settle=lambda: None) -> Promise:
-        promise = Promise(self._successor_executor)
+        cls = self.__class__
+        promise = cls(self._successor_executor, named='chained:%s' % self._name)
         on_settle = _CachedGeneratorFunc(on_settle)
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             try:
                 yield from on_settle()
                 yield from promise._adopt(self)
@@ -189,33 +199,38 @@ class Promise:
 
     @classmethod
     def settle(cls, promise: Promise) -> Promise:
-        if not isinstance(promise, Promise):
+        if not isinstance(promise, cls):
             raise TypeError(type(promise))
         for i in promise:
             pass
         return promise
 
     @classmethod
-    def _multi_successors_executor(cls, promises):
+    def _make_multi_executor(cls, promises):
         def executor(resolve, reject):
             for p in promises:
-                yield from p._successor_executor()
+                try:
+                    yield from p._successor_executor()
+                except StopEarly:
+                    raise StopIteration
         return executor
 
     @classmethod
     def all(cls, *promises) -> Promise:
         fulfillments = {}
-        promise = Promise(cls._multi_successors_executor(promises))
+        promise = cls(cls._make_multi_executor(promises), named='all')
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             if promise._state is not PENDING:
-                yield from promise._run_resolvers()
+                return
             if settled._state is REJECTED:
                 yield from promise._reject(settled._value)
+                raise StopEarly
             fulfillments[settled] = settled._value
             if len(fulfillments) == len(promises):
                 results = [fulfillments[p] for p in promises]
                 yield from promise._resolve(results)
+                raise StopEarly
 
         for p in promises:
             p._add_resolver(resolver)
@@ -223,12 +238,13 @@ class Promise:
 
     @classmethod
     def race(cls, *promises):
-        promise = Promise(cls._multi_successors_executor(promises))
+        promise = cls(cls._make_multi_executor(promises), named='race')
 
-        def resolver(settled: Promise):
+        def resolver(settled: cls):
             if promise._state is not PENDING:
-                yield from promise._run_resolvers()
+                return
             yield from promise._adopt(settled)
+            raise StopEarly
 
         for p in promises:
             p._add_resolver(resolver)
@@ -275,7 +291,7 @@ class Promise:
         return hash((self.__class__, self._hash))
 
     def __str__(self):
-        s1 = '<Promise at %s (%s)' % (hex(id(self)), self._state.value)
+        s1 = "<Promise '%s' at %s (%s)" % (self._name, hex(id(self)), self._state.value)
         if self._state is PENDING:
             return s1 + '>'
         elif self._state is FULFILLED:
@@ -284,7 +300,10 @@ class Promise:
             return s1 + ' => ' + repr(self._value) + '>'
 
     def __repr__(self):
-        return '<%s at %s (%s): %s>' % (self.__class__.__name__, hex(id(self)), self._state.value, repr(self._value))
+        return '<%s %s at %s (%s): %s>' % (
+            self.__class__.__name__, repr(self._exec), hex(id(self)),
+            self._state.value, repr(self._value),
+        )
 
     @property
     def __name__(self):
@@ -317,8 +336,17 @@ class Promise:
                 return (yield from this._resolve(value))
             return (yield from this._reject(value))
 
-    def __await__(self):
-        raise NotImplementedError()
+    def _not_async(self, *args, **kwargs):
+        raise NotImplementedError(
+            '%s is not async-compatible.\n'
+            'To enable async functionality, use notcallback.async_.Promise'
+            % (repr(self.__class__)),
+        )
 
-    def awaitable(self):
-        raise NotImplementedError()
+    awaitable = _not_async
+    __await__ = _not_async
+    __aiter__ = _not_async
+    __anext__ = _not_async
+    asend = _not_async
+    athrow = _not_async
+    aclose = _not_async

@@ -1,11 +1,29 @@
 import asyncio
+import random
+import sys  # noqa
 import time
 
 import pytest
 
-from notcallback import Promise
+from notcallback.async_ import Promise
 
 LEEWAY = 1.014
+# SEED = random.randrange(sys.maxsize)
+SEED = 7914905441759771169
+RNG = random.Random(SEED)
+print(f'RNG seed: {SEED}')
+
+
+def timer():
+    start = time.perf_counter()
+    yield
+    yield time.perf_counter() - start
+
+
+def on_time(timed, expected, *, precision=4):
+    precision = 10 ** precision
+    timed = int(timed * precision) / precision
+    return timed >= expected and timed <= expected * LEEWAY
 
 
 @pytest.mark.asyncio
@@ -23,7 +41,7 @@ async def test_await():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_await():
+async def test_concurrently_await():
     start_timestamps = {}
     end_timestamps = {}
     duration = .5
@@ -48,19 +66,15 @@ async def test_concurrent_await():
 
     for i in range(1, count):
         assert start_timestamps[i] < end_timestamps[i - 1]
-        assert end_timestamps[i] - start_timestamps[i] > duration
-        assert end_timestamps[i] - start_timestamps[i] < duration * LEEWAY
+        timed = end_timestamps[i] - start_timestamps[i]
+        assert on_time(timed, duration)
 
     return promises
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason='Time-consuming')
-async def test_rand():
+def _rand_setup():
     # Worse version of https://realpython.com/async-io-python/#the-asyncio-package-and-asyncawait
-    import random
 
-    random.seed(444)
     # ANSI colors
     c = (
         '\033[0m',   # End of color
@@ -69,8 +83,8 @@ async def test_rand():
         '\033[35m',  # Magenta
     )
 
-    conf = {i: 10 - i - 1 for i in range(3)}
-    expected_wait_times = {i: 5e-4 for i in range(3)}
+    records = {i: 10 - i - 1 for i in range(3)}
+    expected_wait_times = {i: 0 for i in range(3)}
     run_times = {}
 
     def makerandom(idx: int, threshold: int = 6) -> Promise:
@@ -81,7 +95,7 @@ async def test_rand():
             yield from resolve()
 
         def make(_):
-            return random.randint(0, 10)
+            return RNG.randint(0, 10)
 
         def evaluate(i):
             if i <= threshold:
@@ -97,12 +111,94 @@ async def test_rand():
 
         return Promise(start).then(make).then(evaluate)
 
-    promises = [makerandom(i, 10 - i - 1) for i in range(3)]
-    start = time.perf_counter()
-    results = dict(await asyncio.gather(*(p.awaitable() for p in promises)))
+    return records, expected_wait_times, run_times, makerandom
 
-    assert time.perf_counter() - start < max(expected_wait_times.values()) * LEEWAY
-    for k in conf:
-        assert run_times[k] < expected_wait_times[k] * LEEWAY
-    for k, v in conf.items():
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason='Time-consuming')
+async def test_rand():
+    records, expected_wait_times, run_times, makerandom = _rand_setup()
+
+    promises = [makerandom(i, 10 - i - 1) for i in range(3)]
+    t = timer()
+    next(t)
+    results = dict(await asyncio.gather(*(p.awaitable() for p in promises)))
+    duration = next(t)
+
+    assert on_time(duration, max(expected_wait_times.values()))
+    for k in records:
+        assert on_time(run_times[k], expected_wait_times[k])
+    for k, v in records.items():
         assert results[k] > v
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
+async def test_rand_all():
+    records, expected_wait_times, run_times, makerandom = _rand_setup()
+
+    promises = [makerandom(i, 10 - i - 1) for i in range(3)]
+    t = timer()
+    next(t)
+    results = dict(await Promise.all(*promises, concurrently=True))
+    duration = next(t)
+
+    assert on_time(duration, max(expected_wait_times.values()))
+    for k in records:
+        assert on_time(run_times[k], expected_wait_times[k])
+    for k, v in records.items():
+        assert results[k] > v
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
+async def test_all_resolved():
+    num = [random.randint(0, 100) for i in range(5)]
+    promises = [Promise.resolve(i) for i in num]
+
+    p = Promise.all(*promises, concurrently=True).then(sum)
+    await p
+
+    assert p.is_fulfilled
+    assert p.value == sum(num)
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
+async def test_all_reject_one():
+    num = [random.randint(0, 100) for i in range(5)]
+    promises = [Promise.resolve(i) for i in num]
+
+    def r(_):
+        raise ArithmeticError()
+
+    promises[3] = promises[3].then(r)
+
+    p = Promise.all(*promises, concurrently=True)
+    with pytest.raises(ArithmeticError):
+        await p
+
+
+@pytest.mark.asyncio
+# @pytest.mark.skip(reason='Time-consuming')
+async def test_race_resolve():
+    def wait(s):
+        def e(r, _):
+            yield asyncio.sleep(s)
+            yield from r(s)
+        return e
+
+    num = [random.randint(0, 10) for i in range(5)]
+    promises = [Promise(wait(i)) for i in num]
+
+    p = Promise.race(*promises, concurrently=True)
+
+    t = timer()
+    next(t)
+    await p
+    duration = next(t)
+
+    shortest = min(num)
+    assert p.is_fulfilled
+    assert p.value == shortest
+    assert on_time(duration, shortest, precision=3)

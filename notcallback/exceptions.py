@@ -1,5 +1,25 @@
-import warnings
-from contextlib import contextmanager
+# MIT License
+#
+# Copyright (c) 2020 Tony Wu <tony[dot]wu(at)nyu[dot]edu>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from traceback import format_tb
 
 
@@ -9,6 +29,10 @@ class PromiseRejection(RuntimeError):
 
     def __str__(self):
         return self.__class__.__name__ + ': ' + str(self.value)
+
+
+class StopEarly(GeneratorExit):
+    pass
 
 
 class PromiseException(Exception):
@@ -30,6 +54,11 @@ class HandlerNotCallableError(PromiseException, TypeError):
 
 
 class PromiseWarning(RuntimeWarning):
+    def _print_warning(self):
+        return '%s: %s\n' % (self.__class__.__name__, self.__str__())
+
+
+class AsyncPromiseWarning(PromiseWarning):
     pass
 
 
@@ -52,17 +81,3 @@ class UnhandledPromiseRejectionWarning(PromiseWarning):
 
     def __str__(self):
         return self.__class__.__name__ + ': ' + str(self.reason)
-
-    @classmethod
-    @contextmanager
-    def about_to_warn(cls):
-        fmt = warnings.formatwarning
-        warnings.formatwarning = cls._formatwarning
-        try:
-            yield
-        finally:
-            warnings.formatwarning = fmt
-
-    @classmethod
-    def _formatwarning(cls, message, category, filename, lineno, file=None, line=None):
-        return message._print_warning()
