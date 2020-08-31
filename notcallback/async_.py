@@ -73,8 +73,7 @@ class Promise(BasePromise):
     @classmethod
     def _make_concurrent_executor(cls, this: Promise, promises):
         def executor(resolve, reject):
-            futures = []
-            futures[:] = [asyncio.ensure_future(cls._async_cancellable(p, futures)) for p in promises]
+            futures = [asyncio.ensure_future(p.awaitable()) for p in promises]
             awaitables = asyncio.as_completed(futures)
             yield from awaitables
         return executor

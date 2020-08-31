@@ -28,7 +28,7 @@ from typing import Any, Generator, Tuple
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseException, PromisePending, PromiseRejection,
-                         PromiseWarning, StopEarly)
+                         PromiseWarning)
 from .utils import _CachedGeneratorFunc, as_generator_func
 
 
@@ -209,10 +209,7 @@ class Promise:
     def _make_multi_executor(cls, promises):
         def executor(resolve, reject):
             for p in promises:
-                try:
-                    yield from p._successor_executor()
-                except StopEarly:
-                    raise StopIteration
+                yield from p._successor_executor()
         return executor
 
     @classmethod
@@ -221,16 +218,12 @@ class Promise:
         promise = cls(cls._make_multi_executor(promises), named='all')
 
         def resolver(settled: cls):
-            if promise._state is not PENDING:
-                return
             if settled._state is REJECTED:
                 yield from promise._reject(settled._value)
-                raise StopEarly
             fulfillments[settled] = settled._value
             if len(fulfillments) == len(promises):
                 results = [fulfillments[p] for p in promises]
                 yield from promise._resolve(results)
-                raise StopEarly
 
         for p in promises:
             p._add_resolver(resolver)
@@ -241,10 +234,7 @@ class Promise:
         promise = cls(cls._make_multi_executor(promises), named='race')
 
         def resolver(settled: cls):
-            if promise._state is not PENDING:
-                return
             yield from promise._adopt(settled)
-            raise StopEarly
 
         for p in promises:
             p._add_resolver(resolver)
