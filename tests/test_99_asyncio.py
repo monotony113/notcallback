@@ -276,3 +276,32 @@ async def test_race_reject():
             assert promises[i].is_rejected_due_to(EOFError)
         else:
             assert promises[i].is_fulfilled
+
+
+@pytest.mark.asyncio
+async def test_all_settled():
+    def task1(r, _):
+        yield from r(100)
+
+    def task2(_, r):
+        yield from r(-100)
+
+    def task3(r, _):
+        yield asyncio.sleep(.5)
+        yield from r(.5)
+
+    def task4(r, _):
+        raise BufferError
+
+    def check(results):
+        assert results[0].is_fulfilled
+        assert results[0].value == 100
+        assert results[1].is_rejected
+        assert results[1].value == -100
+        assert results[2].is_fulfilled
+        assert results[2].value == .5
+        assert results[3].is_rejected_due_to(BufferError)
+
+    p = Promise.all_settled(*[Promise(t) for t in [task1, task2, task3, task4]]).then(check)
+    await p
+    assert p.is_fulfilled

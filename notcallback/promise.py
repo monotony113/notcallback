@@ -242,14 +242,14 @@ class Promise:
 
     @classmethod
     def all_settled(cls, *promises):
-        outcomes = {}
+        settled_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.all_settled')
 
         def resolver(settled: cls):
-            outcomes[settled] = settled._value
-            if len(outcomes) == len(promises):
-                results = [outcomes[p] for p in promises]
-                yield from promise._resolve(results)
+            nonlocal settled_count
+            settled_count += 1
+            if settled_count == len(promises):
+                yield from promise._resolve(promises)
 
         for p in promises:
             p._add_resolver(resolver)
