@@ -136,6 +136,7 @@ def test_fulfiller_chain():
         .then(add(10))
         .then(lambda v: values.__setitem__('sum', v))
     )
+    print(p)
 
     for _ in p:
         pass

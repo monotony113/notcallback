@@ -20,10 +20,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from __future__ import annotations
+
 import asyncio
 from typing import Any
 
-from .exceptions import PromiseRejection, PromiseWarning
+from .exceptions import PromiseRejection, PromiseWarning, StopEarly
 from .promise import Promise as BasePromise
 
 
@@ -37,12 +39,14 @@ class Promise(BasePromise):
             future.set_result(item)
             return future
 
-    def __await__(self):
-        return self.awaitable().__await__()
-
     async def awaitable(self) -> Any:
         for i in self:
-            await self._ensure_future(i)
+            try:
+                await self._ensure_future(i)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.throw(e)
         if self.is_fulfilled:
             return self._value
         elif self.is_rejected:
@@ -50,6 +54,40 @@ class Promise(BasePromise):
             if isinstance(reason, BaseException):
                 raise reason
             raise PromiseRejection(reason)
+        return
+
+    @classmethod
+    async def _async_cancellable(cls, promise, futures):
+        try:
+            return await promise
+        except StopEarly:
+            for f in futures:
+                f.cancel()
+
+    @classmethod
+    def _make_concurrent_executor(cls, this: Promise, promises):
+        def executor(resolve, reject):
+            futures = []
+            futures[:] = [asyncio.ensure_future(cls._async_cancellable(p, futures)) for p in promises]
+            awaitables = asyncio.as_completed(futures)
+            yield from awaitables
+        return executor
+
+    @classmethod
+    def _dispatch_aggregate_methods(cls, func, *promises, concurrently=False):
+        promise = func(*promises)
+        if not concurrently:
+            return promise
+        promise._prepare(cls._make_concurrent_executor(promise, promises))
+        return promise
+
+    @classmethod
+    def all(cls, *args, **kwargs):
+        return cls._dispatch_aggregate_methods(super().all, *args, **kwargs)
+
+    @classmethod
+    def race(cls, *args, **kwargs):
+        return cls._dispatch_aggregate_methods(super().race, *args, **kwargs)
 
     async def _dispatch_async_gen_method(self, func, *args, **kwargs):
         try:
@@ -66,6 +104,9 @@ class Promise(BasePromise):
             raise
         except Exception as e:
             return await self.athrow(e)
+
+    def __await__(self):
+        return self.awaitable().__await__()
 
     def __aiter__(self):
         return self

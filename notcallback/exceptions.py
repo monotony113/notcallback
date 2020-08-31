@@ -33,6 +33,10 @@ class PromiseRejection(RuntimeError):
         return self.__class__.__name__ + ': ' + str(self.value)
 
 
+class StopEarly(GeneratorExit):
+    pass
+
+
 class PromiseException(Exception):
     pass
 
