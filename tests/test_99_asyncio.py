@@ -16,7 +16,7 @@ print(f'RNG seed: {SEED}')
 
 def timer():
     start = time.perf_counter()
-    yield
+    yield start
     yield time.perf_counter() - start
 
 
@@ -152,53 +152,36 @@ async def test_rand_all():
 
 @pytest.mark.asyncio
 # @pytest.mark.skip(reason='Time-consuming')
-async def test_all_resolved():
-    num = [random.randint(0, 100) for i in range(5)]
-    promises = [Promise.resolve(i) for i in num]
-
-    p = Promise.all(*promises, concurrently=True).then(sum)
-    await p
-
-    assert p.is_fulfilled
-    assert p.value == sum(num)
-
-
-@pytest.mark.asyncio
-# @pytest.mark.skip(reason='Time-consuming')
-async def test_all_reject_one():
-    num = [random.randint(0, 100) for i in range(5)]
-    promises = [Promise.resolve(i) for i in num]
-
-    def r(_):
-        raise ArithmeticError()
-
-    promises[3] = promises[3].then(r)
-
-    p = Promise.all(*promises, concurrently=True)
-    with pytest.raises(ArithmeticError):
-        await p
-
-
-@pytest.mark.asyncio
-# @pytest.mark.skip(reason='Time-consuming')
 async def test_race_resolve():
+    splits = {}
+
     def wait(s):
         def e(r, _):
             yield asyncio.sleep(s)
             yield from r(s)
         return e
 
-    num = [random.randint(0, 10) for i in range(5)]
-    promises = [Promise(wait(i)) for i in num]
+    def record(k):
+        splits[k] = time.perf_counter()
+        return k
 
-    p = Promise.race(*promises, concurrently=True)
+    num = [random.randint(0, 10) for i in range(5)]
+    promises = [Promise(wait(i)).then(record) for i in num]
+
+    p = Promise.race(*promises, concurrently=True).then(lambda _: record('1st'))
 
     t = timer()
-    next(t)
+    start = next(t)
     await p
     duration = next(t)
+    splits = {k: v - start for k, v in splits.items()}
+
+    assert p.is_fulfilled
 
     shortest = min(num)
-    assert p.is_fulfilled
-    assert p.value == shortest
-    assert on_time(duration, shortest, precision=3)
+    longest = max(num)
+    assert on_time(splits['1st'], shortest, precision=3)
+    assert on_time(duration, longest, precision=3)
+    for k, v in splits.items():
+        if isinstance(k, int):
+            assert on_time(v, k, precision=3)

@@ -267,7 +267,7 @@ class Promise:
             raise
         except Exception as e:
             self._exec = self._reject(e)
-            return next(self._exec)
+            return self._dispatch_gen_method(self._exec.__next__)
 
     def __eq__(self, value):
         return (

@@ -42,13 +42,16 @@ class Promise(BasePromise):
             return future
 
     async def awaitable(self) -> Any:
-        for i in self:
+        while True:
             try:
-                await self._ensure_future(i)
-            except asyncio.CancelledError:
+                try:
+                    await self._ensure_future(next(self))
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    self.throw(e)
+            except StopIteration:
                 break
-            except Exception as e:
-                self.throw(e)
         if self.is_fulfilled:
             return self._value
         elif self.is_rejected:
