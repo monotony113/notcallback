@@ -35,7 +35,7 @@ class PromiseState(Enum):
     - `FULFILLED`: When the Promise has been successfully resolved without errors or
     rejections. A Promise in the `FULFILLED` state will have a value associated with it.
     - `REJECTED`: When the Promise is rejected with a value, an exception, or an exception
-    was raised while it is being evaluated. A Promise in the `FULFILLED` state will include
+    was raised while it is being evaluated. A Promise in the `REJECTED` state will include
     the reason of its rejection, which is usually an Exception.
 
     A Promise that is either `FULFILLED` or `REJECTED` is said to have been "settled." A Promise

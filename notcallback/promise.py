@@ -58,7 +58,7 @@ class Promise:
     This class is written using the Promise/A+ specification as the reference. It mimics most of the behaviors outlined
     in Promise/A+, except for one significant difference:
 
-    This is **not** an asynchronous programming framework. The primary goal of Promise is to turn existing codes that
+    This is **not** an asynchronous programming framework. The primary goal of Promise is to turn existing code that
     follows the callback-style paradigm into better-structured and easier-to-understand Promise-style workflow.
 
     The Promise class, on its own, does not offer any async capabilities. You must already be working with an existing
@@ -128,7 +128,7 @@ class Promise:
         Merely calling them will NOT start the settle process.
 
         Ideally, the executor should terminate as soon as it has exhausted the resolve/reject handlers.
-        However there are any codes after finishing handler, they will still be executed. Only the first call to either
+        However, if there are any code after finishing handler, they will still be executed. Only the first call to either
         `resolve` or `reject` will have an effect on the Promise, later calls will be silently ignored.
 
         The return value of the executor does not have significance and will be discarded.
