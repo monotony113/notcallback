@@ -20,6 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Utility functions."""
+
 from __future__ import annotations
 
 import warnings
@@ -33,9 +35,20 @@ from .exceptions import (HandlerNotCallableError,
 
 
 class _CachedGeneratorFunc:
+    """A generator function class, whose generator retains the return value of its evaluation.
+
+    Each `_CachedGeneratorFunc` wraps around a regular function or another generator function.
+
+    Conforms to `collections.abc.Generator` (and therefore .Iterator).
+
+    Does not support awaitables and async iterators/generators.
+    """
 
     class _CachedGenerator:
+        """A wrapper around a regular or generator function that retains the return value of the wrapped function."""
+
         def __init__(self, func, *args, **kwargs):
+            """Init with a function and any args/kwargs that it requires."""
             self._func = func
             self._result = None
             self._finished = False
@@ -88,11 +101,20 @@ class _CachedGeneratorFunc:
 
         @property
         def result(self):
+            """Return the return value of the function.
+
+            If the function has not been run or has not finished running, raise a ValueError.
+            """
             if not self._finished:
                 raise ValueError('Generator has not been run.')
             return self._result
 
     def __init__(self, func):
+        """Init with a callable.
+
+        If the callable is a regular function, the generators this produces will
+        immediately raise StopIteration with the return value when iterated over.
+        """
         if not callable(func):
             raise HandlerNotCallableError(repr(func) + ' is not callable.')
         if isinstance(func, self.__class__):
@@ -101,14 +123,20 @@ class _CachedGeneratorFunc:
             self._func = func
 
     def __call__(self, *args, **kwargs) -> _CachedGeneratorFunc._CachedGenerator:
+        """Produce a generator."""
         return self._CachedGenerator(self._func, *args, **kwargs)
 
     @classmethod
     def wrap(cls, func):
+        """Decorate a function turning it into a Cached Generator Function."""
         return wraps(func)(cls(func))
 
 
 def as_generator_func(func):
+    """Turn a regular function into a generator function, whose generator will yield the return value of the function.
+
+    If the function passed is already a generator function, return it as-is.
+    """
     if isgeneratorfunction(func):
         return func
 
@@ -124,6 +152,7 @@ def _formatwarning(message, category, filename, lineno, file=None, line=None):
 
 @contextmanager
 def one_line_warning_format():
+    """Temporarily change warning format."""
     fmt = warnings.formatwarning
     warnings.formatwarning = _formatwarning
     try:

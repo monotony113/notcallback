@@ -20,6 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""The Promise class."""
+
 from __future__ import annotations
 
 from collections import deque
@@ -33,17 +35,104 @@ from .utils import _CachedGeneratorFunc, as_generator_func
 
 
 def _passthrough(value):
+    """Return the value unmodified.
+
+    This is the default on-fulfillment handler.
+    """
     return value
 
 
 def _reraise(exc):
+    """Re-raise the exception.
+
+    This is the default on-rejection handler.
+    """
     if isinstance(exc, BaseException):
         raise exc
     raise PromiseRejection(exc)
 
 
 class Promise:
+    """The Promise class.
+
+    This class is written using the Promise/A+ specification as the reference. It mimics most of the behaviors outlined
+    in Promise/A+, except for one significant difference:
+
+    This is **not** an asynchronous programming framework. The primary goal of Promise is to turn existing codes that
+    follows the callback-style paradigm into better-structured and easier-to-understand Promise-style workflow.
+
+    The Promise class, on its own, does not offer any async capabilities. You must already be working with an existing
+    async framework (such as Twisted) for it to be any useful.
+
+    See also `notcallback.async_.Promise`, a subclass of this Promise that harness Python's own `asyncio` library.
+
+    Interfaces
+    ----------
+    Promise conforms to `collections.abc.Iterator` and `.Generator`, meaning you can:
+
+    - iterate over it:
+
+    >>> for item in Promise(...): ...
+    >>> return next(Promise(...))
+
+    - or use it as a generator:
+
+    >>> return Promise(...).send(None)
+    >>> yield from Promise(...)
+
+
+    A Promise can be in one of 3 states at any time: PENDING, FULFILLED, or REJECTED. It is PENDING
+    when it is newly created or still running. When it is exhausted, that is, when it raises `StopIteration`,
+    it is said to have been "settled": either FULFILLED or REJECTED. Whether it is fulfilled or rejected
+    depends on how the Promise is configured.
+
+    If a Promise is exhausted but remains PENDING, it may be a programming defect. Please open an issue about it.
+    """
+
     def __init__(self, executor, *, named=None):
+        """Turn a function into a Promise.
+
+        Parameters
+        ----------
+        executor : Callable
+            A function to be turned into a Promise
+        named : str, optional
+            A name for the Promise, used only in str(), by default None
+
+        Description
+        -----------
+        The `Promise()` constructor accepts a function called an "executor," which is either a regular function
+        or a generator function. If a generator function is passed, the Promise will yield the values
+        the generator yields during its evaluation.
+
+        The executor must accept exactly 2 arguments, one called `resolve` and one called `reject`. Currently
+        the Promise class does not allow passing any other additional arguments, you will need to encapsulate the
+        objects you need in your function.
+
+        Both `resolve` and `reject` are generator functions. At some point during the execution, the executor should
+        call one of them with exactly 1 argument:
+
+        - calling `resolve(value)` sets the Promise's state to FULFILLED and set its value to `value`;
+        - calling `reject(reason)` sets the Promise's state to REJECTED and set its value to `reason`.
+
+        Additionally, calling either `resolve` or `reject` will start the evaluation of any chained
+        Promises created by methods such as `Promise.then()`, if any (and their `.then` Promises, too, until
+        the entire Promise chain has been settled).
+
+        As they are generator functions, you must manually exhaust them for the Promise to settle, and for
+        chained Promises to run:
+
+        >>> yield from resolve(value)
+        >>> for _ in reject(reason): ...
+
+        Merely calling them will NOT start the settle process.
+
+        Ideally, the executor should terminate as soon as it has exhausted the resolve/reject handlers.
+        However there are any codes after finishing handler, they will still be executed. Only the first call to either
+        `resolve` or `reject` will have an effect on the Promise, later calls will be silently ignored.
+
+        The return value of the executor does not have significance and will be discarded.
+        """
         self._state: PromiseState = PENDING
         self._value: Any = None
 
@@ -64,49 +153,76 @@ class Promise:
 
     @property
     def state(self) -> PromiseState:
+        """Return the state of the Promise."""
         return self._state
 
     @property
     def value(self) -> Any:
+        """Return the value of the Promise if it is FULFILLED, or the reason of rejection if its REJECTED.
+
+        Attempting to retrieve the value of the Promise when it is still PENDING will result in a `PromisePending`
+        exception. This is so that the `None` that the Promise initially has as its "value" does not get misinterpreted
+        as a fulfillment or rejection whose value/reason is `None`.
+        """
         if self._state is PENDING:
             raise PromisePending()
         return self._value
 
     @property
     def is_pending(self) -> bool:
+        """Return True if the Promise's state is PENDING, and False otherwise."""
         return self._state is PENDING
 
     @property
     def is_settled(self) -> bool:
+        """Return True if the Promise's state is either FULFILLED or REJECTED (settled)."""
         return self._state is not PENDING
 
     @property
     def is_fulfilled(self) -> bool:
+        """Return True if the Promise's state is FULFILLED, and False otherwise."""
         return self._state is FULFILLED
 
     @property
     def is_rejected(self) -> bool:
+        """Return True if the Promise's state is REJECTED, and False otherwise."""
         return self._state is REJECTED
 
     def is_rejected_due_to(self, exc_class) -> bool:
+        """Check whether the Promise was rejected due to a specific type of Exception.
+
+        Return True if the Promise is REJECTED and its value is an instance of `exc_class`, and False in
+        all other cases.
+        """
         return self._state is REJECTED and isinstance(self._value, exc_class)
 
     def _add_resolver(self, resolver):
+        """Add a new resolver to the resolver queue."""
         self._resolvers.append(resolver)
 
     def _make_resolution(self, value=None):
+        """Begin fulfilling this Promise with `value`.
+
+        This is the handler interface exposed to the executor.
+        """
         yield from self._resolve_promise(self, value)
 
     def _make_rejection(self, reason=None):
+        """Begin rejecting this Promise with `reason`.
+
+        This is the handler interface exposed to the executor.
+        """
         yield from self._reject(reason)
 
     def _resolve(self, value):
+        """Actually fulfill the Promise, and begin processing resolvers."""
         if self._state is PENDING:
             self._state = FULFILLED
             self._value = value
         yield from self._run_resolvers()
 
     def _reject(self, reason):
+        """Actually reject the Promise, and begin processing resolvers."""
         if self._state is PENDING:
             self._state = REJECTED
             if isinstance(reason, PromiseRejection):
@@ -115,10 +231,12 @@ class Promise:
         yield from self._run_resolvers()
 
     def _run_resolvers(self):
+        """Process resolvers."""
         while self._resolvers:
             yield from self._resolvers.popleft()(self)
 
     def _adopt(self, other: Promise):
+        """Make this Promise copy the state and value of another Promise."""
         if other._state is FULFILLED:
             yield from self._resolve(other._value)
         if other._state is REJECTED:
@@ -126,6 +244,7 @@ class Promise:
 
     @classmethod
     def _resolve_promise(cls, this: Promise, returned: Any):
+        """Follow the Promise Resolution Procedure in the Promise/A+ specification."""
         if this is returned:
             raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
 
@@ -140,12 +259,111 @@ class Promise:
         return (yield from this._resolve(returned))
 
     def _successor_executor(self, resolve=None, reject=None):
+        """Executor to be used in Promises created with Promise.then(), etc."""
         if self._state is PENDING:
             yield from self
         else:
             yield from self._run_resolvers()
 
     def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
+        """Return a new Promise that waits for this Promise to settle and then reacts accordingly.
+
+        Parameters
+        ----------
+        on_fulfill : Union[Callable, GeneratorFunction], optional
+            handler that will be called when this Promise fulfills, by default _passthrough
+        on_reject : Union[Callable, GeneratorFunction], optional
+            handler that will be called when this Promise rejects, by default _reraise
+
+        Returns
+        -------
+        Promise
+            A new Promise that reacts to the resolution of this Promise.
+
+        Description
+        -----------
+        `then()` takes at most 2 functions as arguments: `on_fulfill` and `on_reject`. Both should
+        take exactly one argument, which is the result of the previous Promise (the Promise whose
+        `.then()` method was called.
+
+        Rules of Promise resolution
+        ---------------------------
+        When the previous Promise becomes settled, exactly one of the handlers will be called,
+
+        - If it is FULFILLED, then `on_fulfill` will be called with the fulfilled value;
+        - If it is REJECTED, then `on_reject` will be called with the reason of rejection;
+
+        `on_fulfill` and `on_reject` can be regular functions or generator functions. If they are generator
+        functions, the Promise will yield their intermediate values.
+
+        Regardless of whether they are generator functions, their return value will be used to settle this new
+        Promise, (the previous Promise is unaffected):
+
+        - If a handler returns a non-Promise object, the "then" Promise will be FULFILLED with that object.
+        (`on_reject` returning a value has the meaning "it has successfully handled the rejection raised
+        by the previous Promise);
+        - If a handler returns an already fulfilled Promise, the "then" Promise will be FULFILLED with the
+        value of that Promise;
+        - If a handler returns an already rejected Promise, the "then" Promise will be REJECTED with the
+        reason of that Promise;
+        - If a handler returns a PENDING Promise, that returned Promise gets settled first, and the
+        "then" Promise will adopt the state and value of that Promise;
+        - If an Exception was raised at any moment and was not caught, the "then" Promise is REJECTED with
+        the Exception.
+
+        If you only provide `on_fulfill`, then the new Promise will have an implicit `on_reject` that reraises the
+        Promise rejection if there is one; if you only provide `on_reject`, then the new Promise will have an
+        implicit `on_fulfill` that simply passes the value through.
+
+        Chaining
+        --------
+        Because `Promise().then()` returns a new Promise, you can write chained Promises:
+
+        >>> Promise(open_login).then(get_headers).then(parse_account_info).then(open_profile)
+
+        Because any Promises returned by `on_fulfill` and `on_reject` are also resolved, you can dynamically insert
+        new Promise into the chain:
+
+        >>> def read_api(json):
+        >>>     ...
+        >>>     return Promise(fetch_additional_page)
+        >>> Promise(open_login).then(read_api).then(parse_account_info).then(open_profile)
+                                              ^
+                                              .will fetch_additional_page here
+
+        And because any rejection that was not handled is propagated down the chain, you can have a common
+        exception handler for multiple actions:
+
+        >>> Promise(open_connection).then(fetch_metadata).then(fetch_rows).then(on_reject=handle_exceptions)
+            # (or .catch(handle_exceptions))
+
+        Branching
+        ---------
+        A Promise can have multiple `.then` handlers associated with it. When the Promise is settled, all of its
+        handlers will be run, in the order that they were declared.
+
+        >>> page = Promise(open_page)
+        >>> page.then(validate_headers)
+        >>> page.then(parse_html).then(fetch_additional_pages)
+
+        Note: do remember that every call to `.then()` will return a new Promise, and the original Promise remain
+        unchanged (except that it now has a new handler). The two `promise` variables in the following snippets
+        reference two different Promise objects:
+
+        >>> promise = Promise(...).then(...)
+
+        >>> promise = Promise(...)
+        >>> Promise.then(...)  # returns a new Promise
+
+        However, regardless of which Promise in a chain/branch you decide to hold reference to, evaluating any Promise
+        within a Promise chain/branch will cause the entire chain/tree to be evaluated.
+
+        >>> p1 = Promise(...)
+        >>> p2 = p1.then(...).catch(...)
+        >>> p3 = p1.finally_(...).then(...)
+        >>> p4 = p2.then(...)
+        >>> # Running any of p1, p2, p3, or p4 will cause all Promises in this snippet to settle.
+        """
         cls = self.__class__
         promise = cls(
             self._successor_executor,
@@ -170,9 +388,46 @@ class Promise:
         return promise
 
     def catch(self, on_reject=_reraise) -> Promise:
+        """Return `Promise().then(<on_fulfill_passthrough>, on_reject)`.
+
+        Parameters
+        ----------
+        on_reject : Union[Callable, GeneratorFunction], optional
+            handler that will be called when this Promise rejects, by default _reraise
+
+        Returns
+        -------
+        Promise
+            A new Promise that catches and handles the rejection raised by previous Promises.
+        """
         return self.then(_passthrough, on_reject)
 
     def finally_(self, on_settle=lambda: None) -> Promise:
+        """Return a Promise whose handler will run regardless of how the previous Promise was settled.
+
+        Parameters
+        ----------
+        on_reject : Union[Callable, GeneratorFunction], optional
+            A function that should be run regardless of whether the previous Promise FULFILLED or REJECTED,
+
+        Returns
+        -------
+        Promise
+            A new Promise that will execute on_settle() and then adopt the state and value of the previous Promise.
+
+        Description
+        -----------
+        Much like Python's `try-finally` block, the handler given to `.finally_()` will run whether
+        the previous Promise was FULFILLED or REJECTED.
+
+        The `on_settle` function will receive no arguments. The idea is that a `finally_()` handler
+        should perform tasks no matter what values the previous Promises have returned, such as closing
+        files and cleaning up. The function should also not return anything, anything that's returned
+        will be discarded.
+
+        When the `on_settle` function finishes running, the "finally" Promise will adopt the state and value
+        of the previous Promise.
+        """
         cls = self.__class__
         promise = cls(self._successor_executor, named='chained:%s' % self._name)
         on_settle = _CachedGeneratorFunc(on_settle)
@@ -191,14 +446,23 @@ class Promise:
 
     @classmethod
     def resolve(cls, value=None) -> Promise:
+        """Return a Promise that is already FULFILLED with `value`.
+
+        If the `value` is another Promise, this Promise will adopt the state and value of that Promise.
+        """
         return cls(lambda resolve, _: (yield from resolve(value)))
 
     @classmethod
     def reject(cls, reason=None) -> Promise:
+        """Return a Promise that is already REJECTED with `reason`."""
         return cls(lambda _, reject: (yield from reject(reason)))
 
     @classmethod
     def settle(cls, promise: Promise) -> Promise:
+        """Run the Promise until it's settled.
+
+        All intermediate values are discarded.
+        """
         if not isinstance(promise, cls):
             raise TypeError(type(promise))
         for i in promise:
@@ -213,7 +477,41 @@ class Promise:
         return executor
 
     @classmethod
+    def _ensure_promise(cls, promises):
+        for p in promises:
+            if not isinstance(p, cls):
+                raise TypeError('%s is not an instance of %s' % (repr(p), repr(cls)))
+
+    @classmethod
     def all(cls, *promises) -> Promise:
+        """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is rejected.
+
+        If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `list` that contains
+        the values of all the Promises, with order preserved.
+
+        If it rejects, it is rejected with the reason of the first rejection that occured.
+
+        Note
+        ----
+        - The Promises are evaluated sequentially.
+        - All of the Promises will be evaluated even if one of them rejects; only the execution order is different.
+
+        For a call that looks like:
+
+            >>> Promise.all(promise1, promise2, promise3).then(on_fulfill).catch(on_reject)
+
+        where none of the Promises have async capabilities (meaning they run in order), if all Promises fulfill
+        successfully, the execution order will be
+
+            ... # promise1 => promise2 => promise3 => on_fulfill()
+
+        If e.g. promise2 rejects or raises an Exception, it will be
+
+            ... # promise1 => promise2 => on_reject() => promise3
+
+        - If there are multiple rejections, only the first one matters.
+        """
+        cls._ensure_promise(promises)
         fulfillments = {}
         promise = cls(cls._make_multi_executor(promises), named='Promise.all')
 
@@ -231,6 +529,18 @@ class Promise:
 
     @classmethod
     def race(cls, *promises):
+        """Return a new Promise that fulfills/rejects as soon as one of the Promises fulfills/rejects.
+
+        It will adopt the state and value of the FULFILLED/REJECTED Promise.
+
+        Note
+        ----
+        - The Promises are evaluated sequentially. This means that if your does not have actual async capabilities,
+        the first Promise in the list will always be the one that "wins the race."
+        - All of the Promises will be evaluated in all cases; only the execution order is different: the Promise's
+        `on_fulfill`/`on_reject` handlers are run immediately after the first Promise has settled.
+        """
+        cls._ensure_promise(promises)
         promise = cls(cls._make_multi_executor(promises), named='Promise.race')
 
         def resolver(settled: cls):
@@ -242,6 +552,11 @@ class Promise:
 
     @classmethod
     def all_settled(cls, *promises):
+        """Return a new Promise that fulfills when all the Promises have settled i.e. either FULFILLED or REJECTED.
+
+        This Promise always fulfills with the list of Promises provided.
+        """
+        cls._ensure_promise(promises)
         settle_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.all_settled')
 
@@ -257,6 +572,15 @@ class Promise:
 
     @classmethod
     def any(cls, *promises):
+        """Return a new Promise that ignore rejections among the provided Promises and fulfills upon the first fulfillment.
+
+        If all Promises reject, it will reject with a PromiseAggregateError.
+
+        Note
+        ----
+        - All Promises are evaluated regardless of fulfillments.
+        """
+        cls._ensure_promise(promises)
         settle_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.any')
 
@@ -273,6 +597,7 @@ class Promise:
         return promise
 
     def __iter__(self):
+        """Return self as the iterable."""
         return self
 
     def __next__(self):
@@ -302,14 +627,31 @@ class Promise:
             return self._dispatch_gen_method(self._exec.__next__)
 
     def __eq__(self, value):
-        return (
-            self.__class__ is value.__class__
-            and self._state is not PENDING
-            and self._state is value._state
-            and self._value == value._value
-        )
+        """Implement == (equality testing).
+
+        Rules:
+        -----
+        - All PENDING Promises test unequal to all other Promises.
+        - Two Promises are equal if they have the same state and their values test equal; if one or both of
+        the values do not implement __eq__, return False.
+        - Promises do not need to have the same executor to be considered equal.
+        """
+        try:
+            return (
+                self.__class__ is value.__class__
+                and self._state is not PENDING
+                and self._state is value._state
+                and self._value == value._value
+            )
+        except NotImplementedError:
+            return False
 
     def __hash__(self):
+        """Implement hashing.
+
+        The hash is produced by hashing the combination (tuple) the Promise class and the hash of the
+        executor function.
+        """
         return hash((self.__class__, self._hash))
 
     def __str__(self):
@@ -365,10 +707,7 @@ class Promise:
             % (repr(self.__class__)),
         )
 
-    awaitable = _not_async
-    __await__ = _not_async
-    __aiter__ = _not_async
-    __anext__ = _not_async
-    asend = _not_async
-    athrow = _not_async
-    aclose = _not_async
+    def __getattr__(self, name):
+        if name in {'awaitable', '__await__', '__aiter__', '__anext__', 'asend', 'athrow', 'aclose'}:
+            return self._not_async
+        return object.__getattribute__(self, name)
