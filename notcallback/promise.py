@@ -70,7 +70,7 @@ class Promise:
     The Promise class, on its own, does not offer any async capabilities. You must already be working with an existing
     async framework (such as Twisted) for it to be any useful.
 
-    See also `notcallback.async_.Promise`, a subclass of this Promise that harness Python's own `asyncio` library.
+    See also `notcallback.async_.Promise`, a subclass of this Promise that harnesses Python's own `asyncio` library.
 
     Interfaces
     ----------
@@ -79,11 +79,11 @@ class Promise:
     - iterate over it:
 
     >>> for item in Promise(...): ...
-    >>> return next(Promise(...))
+    >>> next(Promise(...))
 
     - or use it as a generator:
 
-    >>> return Promise(...).send(None)
+    >>> Promise(...).send(None)
     >>> yield from Promise(...)
 
 
@@ -91,8 +91,6 @@ class Promise:
     when it is newly created or still running. When it is exhausted, that is, when it raises `StopIteration`,
     it is said to have been "settled": either FULFILLED or REJECTED. Whether it is fulfilled or rejected
     depends on how the Promise is configured.
-
-    If a Promise is exhausted but remains PENDING, it may be a programming defect. Please open an issue about it.
     """
 
     def __init__(self, executor: Union[NoReturnCallable, GeneratorFunc], *, named=None):
@@ -107,7 +105,7 @@ class Promise:
 
         Description
         -----------
-        The `Promise()` constructor accepts a function called an "executor," which is either a regular function
+        The `Promise()` initializer accepts a function called an "executor," which is either a regular function
         or a generator function. If a generator function is passed, the Promise will yield the values
         the generator yields during its evaluation.
 
@@ -133,7 +131,7 @@ class Promise:
 
         Merely calling them will NOT start the settle process.
 
-        Ideally, the executor should terminate as soon as it has exhausted the resolve/reject handlers.
+        Ideally, the executor should return as soon as it has exhausted the resolve/reject handlers.
         However, if there are any code after finishing handler, they will still be executed. Only the first call to either
         `resolve` or `reject` will have an effect on the Promise, later calls will be silently ignored.
 
@@ -167,7 +165,7 @@ class Promise:
         """Return the value of the Promise if it is FULFILLED, or the reason of rejection if its REJECTED.
 
         Attempting to retrieve the value of the Promise when it is still PENDING will result in a `PromisePending`
-        exception. This is so that the `None` that the Promise initially has as its "value" does not get misinterpreted
+        exception. This is so that the `None` that the Promise initially has as its "value" does not get mistaken
         as a fulfillment or rejection whose value/reason is `None`.
         """
         if self._state is PENDING:
@@ -215,7 +213,7 @@ class Promise:
         return default
 
     def is_rejected_due_to(self, exc_class) -> bool:
-        """Check whether the Promise was rejected due to a specific type of Exception.
+        """Check whether the Promise was rejected due to a specific type of exception.
 
         Return True if the Promise is REJECTED and its value is an instance of `exc_class`, and False in
         all other cases.
@@ -323,7 +321,7 @@ class Promise:
         functions, the Promise will yield their intermediate values.
 
         Regardless of whether they are generator functions, their return value will be used to settle this new
-        Promise, (the previous Promise is unaffected):
+        Promise (the previous Promise is unaffected):
 
         - If a handler returns a non-Promise object, the "then" Promise will be FULFILLED with that object.
         (`on_reject` returning a value has the meaning "it has successfully handled the rejection raised
@@ -334,12 +332,11 @@ class Promise:
         reason of that Promise;
         - If a handler returns a PENDING Promise, that returned Promise gets settled first, and the
         "then" Promise will adopt the state and value of that Promise;
-        - If an Exception was raised at any moment and was not caught, the "then" Promise is REJECTED with
-        the Exception.
+        - If an exception was raised at any moment and was not caught, the "then" Promise is REJECTED with
+        the exception.
 
         If you only provide `on_fulfill`, then the new Promise will have an implicit `on_reject` that reraises the
-        Promise rejection if there is one; if you only provide `on_reject`, then the new Promise will have an
-        implicit `on_fulfill` that simply passes the value through.
+        Promise rejection if there is one.
 
         Chaining
         --------
@@ -354,14 +351,14 @@ class Promise:
         >>>     ...
         >>>     return Promise(fetch_additional_page)
         >>> Promise(open_login).then(read_api).then(parse_account_info).then(open_profile)
-                                              ^
-                                              .will fetch_additional_page here
+        #                                     ^
+        #                                     .will fetch_additional_page here
 
         And because any rejection that was not handled is propagated down the chain, you can have a common
         exception handler for multiple actions:
 
         >>> Promise(open_connection).then(fetch_metadata).then(fetch_rows).then(on_reject=handle_exceptions)
-            # (or .catch(handle_exceptions))
+            # or .catch(handle_exceptions)
 
         Branching
         ---------
@@ -388,7 +385,7 @@ class Promise:
         >>> p2 = p1.then(...).catch(...)
         >>> p3 = p1.finally_(...).then(...)
         >>> p4 = p2.then(...)
-        >>> # Running any of p1, p2, p3, or p4 will cause all Promises in this snippet to settle.
+        >>> # Evaluating any of p1, p2, p3, or p4 will cause all Promises in this snippet to settle.
         """
         cls: Type[PromiseType] = self.__class__
         promise = cls(
@@ -433,7 +430,7 @@ class Promise:
 
         Parameters
         ----------
-        on_reject : Union[Callable, GeneratorFunction], optional
+        on_settle : Union[Callable, GeneratorFunction], optional
             A function that should be run regardless of whether the previous Promise FULFILLED or REJECTED,
 
         Returns
@@ -443,7 +440,7 @@ class Promise:
 
         Description
         -----------
-        Much like Python's `try-finally` block, the handler given to `.finally_()` will run whether
+        Much like Python's `try-finally` block, the handler given to `.finally_()` will run no matter
         the previous Promise was FULFILLED or REJECTED.
 
         The `on_settle` function will receive no arguments. The idea is that a `finally_()` handler
@@ -510,9 +507,9 @@ class Promise:
 
     @classmethod
     def all(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
-        """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is rejected.
+        """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is REJECTED.
 
-        If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `list` that contains
+        If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `tuple` that contains
         the values of all the Promises, with order preserved.
 
         If it rejects, it is rejected with the reason of the first rejection that occured.
@@ -526,16 +523,15 @@ class Promise:
 
             >>> Promise.all(promise1, promise2, promise3).then(on_fulfill).catch(on_reject)
 
-        where none of the Promises have async capabilities (meaning they run in order), if all Promises fulfill
-        successfully, the execution order will be
+        if all Promises fulfill successfully, the execution order will be
 
-            ... # promise1 => promise2 => promise3 => on_fulfill()
+            promise1 => promise2 => promise3 => on_fulfill()
 
-        If e.g. promise2 rejects or raises an Exception, it will be
+        If e.g. promise2 rejects or raises an exception, it will be
 
-            ... # promise1 => promise2 => on_reject() => promise3
+            promise1 => promise2 => on_reject() => promise3
 
-        - If there are multiple rejections, only the first one matters.
+        - If there are multiple rejections, only the first one will have any effect.
         """
         cls._ensure_promise(promises)
         fulfillments = {}
@@ -546,7 +542,7 @@ class Promise:
                 yield from promise._reject(settled._value)
             fulfillments[settled] = settled._value
             if len(fulfillments) == len(promises):
-                results = [fulfillments[p] for p in promises]
+                results = (fulfillments[p] for p in promises)
                 yield from promise._resolve(results)
 
         for p in promises:

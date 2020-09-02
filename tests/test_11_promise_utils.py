@@ -158,3 +158,10 @@ def test_any_no_resolve():
     Promise.settle(p)
 
     assert p.is_rejected_due_to(PromiseAggregateError)
+
+
+def test_empty():
+    Promise.settle(Promise.all())
+    Promise.settle(Promise.race())
+    Promise.settle(Promise.all_settled())
+    Promise.settle(Promise.any())

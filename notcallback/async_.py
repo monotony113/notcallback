@@ -43,7 +43,7 @@ class Promise(BasePromise):
     --------
     - Promises can be `await`ed
         - `yield`ing an async function when the Promise is being `await`ed will schedule and `await` that function
-        - If an `await`ed Promise eventually rejects, the rejection is raised as an Exception, allowing exception
+        - If an `await`ed Promise eventually rejects, the rejection is raised as an exception, allowing exception
         handling using try-except; this mimics the `async/await` behavior in JavaScript.
     - Promises are `AsyncIterator`s, meaning they can be used in `async for`
         - Any regular values are `yield`ed, and any async functions are `await`ed
@@ -125,14 +125,15 @@ class Promise(BasePromise):
         PromiseRejection
             If the Promise eventually rejects, the reason is raised.
         """
+        value = None
         while True:
             try:
                 try:
-                    await self._ensure_future(next(self))
+                    value = await self._ensure_future(self.send(value))
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    self.throw(e)
+                    value = self.throw(e)
             except StopIteration:
                 break
         if self.is_fulfilled:
