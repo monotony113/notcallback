@@ -1,4 +1,4 @@
-# Not callback
+# Not callback.
 
 Promise-style interfaces for callback-based asynchronous libraries.
 
@@ -21,10 +21,10 @@ yield from (
 
 ## Contents
 
-- [Note on asynchrony](#note-on-asynchrony)
 - [Examples](#examples)
 - [`async/await` and asyncio](#async)
 - [API Reference](#api-reference)
+- [See also](#see-also)
 
 ----
 
@@ -231,13 +231,13 @@ This library provides all 4 static Promise methods available in JavaScript: `Pro
 
 For example:
 
-**`Promise.all()`**: Only resolve when all the Promises in the list are fulfilled, and reject as soon as one of them rejects:
+#### **`Promise.all()`**: Only resolve when all the Promises in the list are fulfilled, and reject as soon as one of them rejects:
 
 ```python
 Promise.all(register_hardware, config_simulators, load_assets).then(render).catch(warn)
 ```
 
-**`Promise.race()`**: Resolve/reject as soon as one of the promises fulfills/rejects:
+#### **`Promise.race()`**: Resolve/reject as soon as one of the promises fulfills/rejects:
 ```python
 Promise.race(*[access(file, region) for region in [
     'USNCalifornia',
@@ -402,9 +402,9 @@ concurrently.
 
 ## API Reference
 
-#### Initializer
+### Initializer
 
-**`Promise(executor)`**
+#### **`Promise(executor)`**
 
 _Reference JavaScript function: [Promise() constructor](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/Promise)_
 
@@ -416,14 +416,14 @@ either `resolve()` or `reject()` with the fulfilled value/rejection reason as th
 `resolve()` and `reject()` return a new generator, and `executor` must exhaust it, either by using `yield from`
 or iterate over it.
 
-#### Properties
+### Properties
 
-**`Promise().state`**
+#### **`Promise().state`**
 
 Return the state of the Promise. This is a `notcallback.base.PromiseState` Enum which can be one of 3 values:
 `PENDING`, `FULFILLED`, or `REJECTED`.
 
-**`Promise().value`**
+#### **`Promise().value`**
 
 Return the value of the Promise if it is fulfilled, or the reason of rejection if it is rejected.
 
@@ -433,14 +433,13 @@ as a fulfillment or rejection whose value/reason is `None`.
 
 See also: [**`Promise().get()`**](#get-method), [**`Promise().fulfilled(exc_type)`**](#fulfilled-rejected), [**`Promise().rejected(exc_type)`**](#fulfilled-rejected)
 
-**`Promise().is_pending`**, **`Promise().is_fulfilled`**,
-**`Promise().is_rejected`**, **`Promise().is_settled`**
+#### **`Promise().is_pending`**, **`Promise().is_fulfilled`**, **`Promise().is_rejected`**, **`Promise().is_settled`**
 
 These properties check whether a Promise is in a certain state.
 
-#### Instance methods
+### Instance methods
 
-**`Promise().then(on_fulfill, on_reject)`**
+#### **`Promise().then(on_fulfill, on_reject)`**
 
 _Reference JavaScript function: [Promise.prototype.then()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/then)_
 
@@ -460,13 +459,13 @@ the state and value of that `Promise`.
 
 If the handler raises an exception, the new Promise will be rejected with that exception.
 
-**`Promise().catch(on_reject)`**
+#### **`Promise().catch(on_reject)`**
 
 _Reference JavaScript function: [Promise.prototype.catch()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/catch)_
 
 Convenience method for registering an exception handler. Sugar for `Promise().then(on_reject=on_reject)`.
 
-**`Promise().finally_(on_settle)`**
+#### **`Promise().finally_(on_settle)`**
 
 _Reference JavaScript function: [Promise.prototype.finally()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/finally)_
 
@@ -477,35 +476,35 @@ Return a Promise whose handler will run regardless of how the previous Promise w
 The new Promise will adopt the state and value of the previous Promise. If an exception was raised
 when running `on_settle`, the new Promise will reject with that exception.
 
-**`Promise().get(default=None)`**<span id="get-method"></span>
+#### **`Promise().get(default=None)`**<span id="get-method"></span>
 
 Return the value of the Promise if it is FULFILLED, or the reason fpr rejection if its REJECTED.
 
 Unlike the `Promise().value` property, which raises if the Promise is not settled, this method
 will return `default` if the Promise's value is None regardless of its state.
 
-**`Promise().fulfilled(default=None)`**, **`Promise().rejected(default=None)`**<span id="fulfilled-rejected"></span>
+#### **`Promise().fulfilled(default=None)`**, **`Promise().rejected(default=None)`**<span id="fulfilled-rejected"></span>
 
 Return the value of the Promise only if it is in the specified state
 
 Return the default value if it is not in that state, or if the value is `None`.
 
-**`Promise().is_rejected_due_to(exc_type)`**
+#### **`Promise().is_rejected_due_to(exc_type)`**
 
 Check whether the Promise was rejected due to a specific type of exception.
 
 Return `True` if the Promise is rejected and its value is an instance of `exc_class`, and `False` in
 all other cases.
 
-**`Promise().awaitable()`**
+#### **`Promise().awaitable()`**
 
 _Only available in `notcallback.async_.Promise`_
 
 Return the Promise as an awaitable.
 
-#### Class methods
+### Class methods
 
-**`Promise.all(*promises)`**
+#### **`Promise.all(*promises)`**
 
 _Reference JavaScript function: [Promise.all()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all)_
 
@@ -539,7 +538,7 @@ If there are multiple rejections, only the first one will have any effect.
 
 _Only available in `notcallback.async_.Promise`_: accepts an additional `concurrently` keyword-only argument.
 
-**`Promise.race(*promises)`**
+#### **`Promise.race(*promises)`**
 
 _Reference JavaScript function: [Promise.race()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all)_
 
@@ -555,7 +554,7 @@ the first Promise in the list will always "win the race."
 
 _Only available in `notcallback.async_.Promise`_: accepts an additional `concurrently` keyword-only argument.
 
-**`Promise.all_settled(*promises)`**
+#### **`Promise.all_settled(*promises)`**
 
 _Reference JavaScript function: [Promise.allSettled()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled)_
 
@@ -565,7 +564,7 @@ The returned Promise always fulfills with the list of Promises provided.
 
 _Only available in `notcallback.async_.Promise`_: accepts an additional `concurrently` keyword-only argument.
 
-**`Promise.any(*promises)`**
+#### **`Promise.any(*promises)`**
 
 _Reference JavaScript function: [Promise.any()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/any)_
 
@@ -579,19 +578,23 @@ Note:
 
 _Only available in `notcallback.async_.Promise`_: accepts an additional `concurrently` keyword-only argument.
 
-**`Promise.resolve(value)`**
+#### **`Promise.resolve(value)`**
 
 _Reference JavaScript function: [Promise.resolve()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/resolve)_
 
 Return a new Promise that will resolve with `value` when it is evaluated. If the value is another Promise, this new Promise will
 adopt the state and value of that Promise.
 
-**`Promise.reject(reason)`**
+#### **`Promise.reject(reason)`**
 
 _Reference JavaScript function: [Promise.reject()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/reject)_
 
 Return a new Promise that will reject with `reason` when it is evaluated.
 
-**`Promise.settle(promise)`**
+#### **`Promise.settle(promise)`**
 
 A helper function that runs the Promise until it's settled and then return it. All intermediate values are discarded.
+
+## See also
+
+[promise](https://github.com/syrusakbary/promise), another Python implementation that is Promise/A+ compliant.
