@@ -22,8 +22,6 @@
 
 """Utility functions."""
 
-from __future__ import annotations
-
 import warnings
 from contextlib import contextmanager
 from functools import wraps
@@ -122,7 +120,7 @@ class _CachedGeneratorFunc:
         else:
             self._func = func
 
-    def __call__(self, *args, **kwargs) -> _CachedGeneratorFunc._CachedGenerator:
+    def __call__(self, *args, **kwargs):
         """Produce a generator."""
         return self._CachedGenerator(self._func, *args, **kwargs)
 

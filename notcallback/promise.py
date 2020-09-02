@@ -22,22 +22,23 @@
 
 """The Promise class."""
 
-from __future__ import annotations
-
 from collections import deque
 from inspect import isgenerator
-from typing import (Any, Callable, Generator, List, Optional, Tuple, Type,
-                    TypeVar, Union)
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseAggregateError, PromiseException,
                          PromisePending, PromiseRejection, PromiseWarning)
 from .utils import _CachedGeneratorFunc, as_generator_func
 
-PromiseType = TypeVar('PromiseType', bound='Promise')
-NoReturnCallable = Callable[..., None]
-NoReturnGenerator = Generator[Any, Any, None]
-GeneratorFunc = Callable[..., NoReturnGenerator]
+try:
+    from typing import (Any, Callable, Generator, List, Optional, Tuple, Type,
+                        TypeVar, Union)
+    PromiseType = TypeVar('PromiseType', bound='Promise')
+    NoReturnCallable = Callable[..., None]
+    NoReturnGenerator = Generator[Any, Any, None]
+    GeneratorFunc = Callable[..., NoReturnGenerator]
+except ImportError:
+    pass
 
 
 def _passthrough(value):
@@ -410,7 +411,7 @@ class Promise:
 
         return promise
 
-    def catch(self, on_reject=_reraise) -> Promise:
+    def catch(self, on_reject=_reraise) -> PromiseType:
         """Return `Promise().then(<on_fulfill_passthrough>, on_reject)`.
 
         Parameters
@@ -481,7 +482,7 @@ class Promise:
         return cls(lambda _, reject: (yield from reject(reason)))
 
     @classmethod
-    def settle(cls, promise: Promise) -> Promise:
+    def settle(cls, promise: PromiseType) -> PromiseType:
         """Run the Promise until it's settled.
 
         All intermediate values are discarded.
@@ -696,7 +697,7 @@ class Promise:
         return self.__str__()
 
     @classmethod
-    def _resolve_promise_like(cls, this: Promise, obj):
+    def _resolve_promise_like(cls, this: PromiseType, obj):
         calls: List[Tuple[PromiseState, Any]] = []
 
         def on_fulfill(val):

@@ -22,8 +22,6 @@
 
 """Promise with asyncio."""
 
-from __future__ import annotations
-
 import asyncio
 import warnings
 
@@ -31,6 +29,11 @@ from .exceptions import (AsyncPromiseWarning, PromiseException,
                          PromiseRejection, PromiseWarning)
 from .promise import Promise as BasePromise
 from .utils import one_line_warning_format
+
+try:
+    from .promise import PromiseType
+except ImportError:
+    pass
 
 
 class Promise(BasePromise):
@@ -159,7 +162,7 @@ class Promise(BasePromise):
             pass
 
     @classmethod
-    def _make_concurrent_executor(cls, this: Promise, promises):
+    def _make_concurrent_executor(cls, this: PromiseType, promises):
         def executor(resolve, reject):
             futures = [asyncio.ensure_future(cls._ensure_completion(p)) for p in promises]
             awaitables = asyncio.as_completed(futures)
@@ -175,7 +178,7 @@ class Promise(BasePromise):
         return promise
 
     @classmethod
-    def all(cls, *args, **kwargs) -> Promise:
+    def all(cls, *args, **kwargs) -> PromiseType:
         """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is rejected.
 
         Parameters
@@ -204,7 +207,7 @@ class Promise(BasePromise):
         return cls._dispatch_aggregate_methods(super().all, *args, **kwargs)
 
     @classmethod
-    def race(cls, *args, **kwargs) -> Promise:
+    def race(cls, *args, **kwargs) -> PromiseType:
         """Return a new Promise that fulfills/rejects as soon as one of the Promises fulfills/rejects.
 
         Parameters
@@ -236,7 +239,7 @@ class Promise(BasePromise):
         return cls._dispatch_aggregate_methods(super().race, *args, **kwargs)
 
     @classmethod
-    def all_settled(cls, *args, **kwargs) -> Promise:
+    def all_settled(cls, *args, **kwargs) -> PromiseType:
         """Return a new Promise that fulfills when all the Promises have settled i.e. either FULFILLED or REJECTED.
 
         Parameters
@@ -256,7 +259,7 @@ class Promise(BasePromise):
         return cls._dispatch_aggregate_methods(super().all_settled, *args, **kwargs)
 
     @classmethod
-    def any(cls, *args, **kwargs) -> Promise:
+    def any(cls, *args, **kwargs) -> PromiseType:
         """Return a new Promise that ignore rejections among the provided Promises and fulfills upon the first fulfillment.
 
         If all Promises reject, it will reject with a PromiseAggregateError.
