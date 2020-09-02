@@ -19,6 +19,12 @@ yield from (
 )
 ```
 
+Install with `pip`:
+
+```bash
+python3 -m pip install notcallback
+```
+
 ## Contents
 
 - [Examples](#examples)
@@ -231,13 +237,13 @@ This library provides all 4 static Promise methods available in JavaScript: `Pro
 
 For example:
 
-#### **`Promise.all()`**: Only resolve when all the Promises in the list are fulfilled, and reject as soon as one of them rejects:
+**`Promise.all()`**: Only resolve when all the Promises in the list are fulfilled, and reject as soon as one of them rejects:
 
 ```python
 Promise.all(register_hardware, config_simulators, load_assets).then(render).catch(warn)
 ```
 
-#### **`Promise.race()`**: Resolve/reject as soon as one of the promises fulfills/rejects:
+**`Promise.race()`**: Resolve/reject as soon as one of the promises fulfills/rejects:
 ```python
 Promise.race(*[access(file, region) for region in [
     'USNCalifornia',
