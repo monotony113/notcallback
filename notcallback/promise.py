@@ -26,12 +26,18 @@ from __future__ import annotations
 
 from collections import deque
 from inspect import isgenerator
-from typing import Any, Generator, Tuple
+from typing import (Any, Callable, Generator, List, Optional, Tuple, Type,
+                    TypeVar, Union)
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseAggregateError, PromiseException,
                          PromisePending, PromiseRejection, PromiseWarning)
 from .utils import _CachedGeneratorFunc, as_generator_func
+
+PromiseType = TypeVar('PromiseType', bound='Promise')
+NoReturnCallable = Callable[..., None]
+NoReturnGenerator = Generator[Any, Any, None]
+GeneratorFunc = Callable[..., NoReturnGenerator]
 
 
 def _passthrough(value):
@@ -89,7 +95,7 @@ class Promise:
     If a Promise is exhausted but remains PENDING, it may be a programming defect. Please open an issue about it.
     """
 
-    def __init__(self, executor, *, named=None):
+    def __init__(self, executor: Union[NoReturnCallable, GeneratorFunc], *, named=None):
         """Turn a function into a Promise.
 
         Parameters
@@ -138,12 +144,12 @@ class Promise:
 
         self.__qualname__ = '%s at %s' % (self.__class__.__name__, hex(id(self)))
 
-        self._exec: Generator
+        self._exec: NoReturnGenerator
         self._hash: int
-        self._name: str = None
+        self._name: Optional[str] = None
         self._prepare(executor, named)
 
-        self._resolvers = deque()
+        self._resolvers: deque = deque()
 
     def _prepare(self, executor, named=None):
         self._exec = as_generator_func(executor)(self._make_resolution, self._make_rejection)
@@ -187,6 +193,26 @@ class Promise:
     def is_rejected(self) -> bool:
         """Return True if the Promise's state is REJECTED, and False otherwise."""
         return self._state is REJECTED
+
+    def get(self, default=None) -> Any:
+        """Return the value of the Promise if it is FULFILLED, or the reason of rejection if its REJECTED.
+
+        Unlike the `Promise().value` property, which raises if the Promise is not settled, this method
+        will return `default` if the Promise's value is None regardless of its state.
+        """
+        return self._value if self._value is not None else default
+
+    def fulfilled(self, default=None) -> Any:
+        """Return the value of the Promise if it is FULFILLED, otherwise return None."""
+        if self._state is FULFILLED and self._value is not None:
+            return self._value
+        return default
+
+    def rejected(self, default=None) -> Any:
+        """Return the reason for rejection of the Promise if it is REJECTED, otherwise return None."""
+        if self._state is REJECTED and self._value is not None:
+            return self._value
+        return default
 
     def is_rejected_due_to(self, exc_class) -> bool:
         """Check whether the Promise was rejected due to a specific type of Exception.
@@ -235,7 +261,7 @@ class Promise:
         while self._resolvers:
             yield from self._resolvers.popleft()(self)
 
-    def _adopt(self, other: Promise):
+    def _adopt(self, other: PromiseType):
         """Make this Promise copy the state and value of another Promise."""
         if other._state is FULFILLED:
             yield from self._resolve(other._value)
@@ -243,7 +269,7 @@ class Promise:
             yield from self._reject(other._value)
 
     @classmethod
-    def _resolve_promise(cls, this: Promise, returned: Any):
+    def _resolve_promise(cls, this: PromiseType, returned: Any):
         """Follow the Promise Resolution Procedure in the Promise/A+ specification."""
         if this is returned:
             raise PromiseException() from TypeError('A Promise cannot resolve to itself.')
@@ -265,7 +291,7 @@ class Promise:
         else:
             yield from self._run_resolvers()
 
-    def then(self, on_fulfill=_passthrough, on_reject=_reraise) -> Promise:
+    def then(self: PromiseType, on_fulfill=_passthrough, on_reject=_reraise) -> PromiseType:
         """Return a new Promise that waits for this Promise to settle and then reacts accordingly.
 
         Parameters
@@ -364,7 +390,7 @@ class Promise:
         >>> p4 = p2.then(...)
         >>> # Running any of p1, p2, p3, or p4 will cause all Promises in this snippet to settle.
         """
-        cls = self.__class__
+        cls: Type[PromiseType] = self.__class__
         promise = cls(
             self._successor_executor,
             named='%s|%s,%s' % (self._name, on_fulfill.__name__, on_reject.__name__),
@@ -374,7 +400,7 @@ class Promise:
             REJECTED: _CachedGeneratorFunc(on_reject),
         }
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             try:
                 handler = handlers[settled._state](settled._value)
                 yield from handler
@@ -402,7 +428,7 @@ class Promise:
         """
         return self.then(_passthrough, on_reject)
 
-    def finally_(self, on_settle=lambda: None) -> Promise:
+    def finally_(self: PromiseType, on_settle=lambda: None) -> PromiseType:
         """Return a Promise whose handler will run regardless of how the previous Promise was settled.
 
         Parameters
@@ -428,11 +454,11 @@ class Promise:
         When the `on_settle` function finishes running, the "finally" Promise will adopt the state and value
         of the previous Promise.
         """
-        cls = self.__class__
+        cls: Type[PromiseType] = self.__class__
         promise = cls(self._successor_executor, named='chained:%s' % self._name)
         on_settle = _CachedGeneratorFunc(on_settle)
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             try:
                 yield from on_settle()
                 yield from promise._adopt(self)
@@ -445,7 +471,7 @@ class Promise:
         return promise
 
     @classmethod
-    def resolve(cls, value=None) -> Promise:
+    def resolve(cls: Type[PromiseType], value=None) -> PromiseType:
         """Return a Promise that is already FULFILLED with `value`.
 
         If the `value` is another Promise, this Promise will adopt the state and value of that Promise.
@@ -453,7 +479,7 @@ class Promise:
         return cls(lambda resolve, _: (yield from resolve(value)))
 
     @classmethod
-    def reject(cls, reason=None) -> Promise:
+    def reject(cls: Type[PromiseType], reason=None) -> PromiseType:
         """Return a Promise that is already REJECTED with `reason`."""
         return cls(lambda _, reject: (yield from reject(reason)))
 
@@ -483,7 +509,7 @@ class Promise:
                 raise TypeError('%s is not an instance of %s' % (repr(p), repr(cls)))
 
     @classmethod
-    def all(cls, *promises) -> Promise:
+    def all(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
         """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is rejected.
 
         If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `list` that contains
@@ -515,7 +541,7 @@ class Promise:
         fulfillments = {}
         promise = cls(cls._make_multi_executor(promises), named='Promise.all')
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             if settled._state is REJECTED:
                 yield from promise._reject(settled._value)
             fulfillments[settled] = settled._value
@@ -528,7 +554,7 @@ class Promise:
         return promise
 
     @classmethod
-    def race(cls, *promises):
+    def race(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
         """Return a new Promise that fulfills/rejects as soon as one of the Promises fulfills/rejects.
 
         It will adopt the state and value of the FULFILLED/REJECTED Promise.
@@ -543,7 +569,7 @@ class Promise:
         cls._ensure_promise(promises)
         promise = cls(cls._make_multi_executor(promises), named='Promise.race')
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             yield from promise._adopt(settled)
 
         for p in promises:
@@ -551,7 +577,7 @@ class Promise:
         return promise
 
     @classmethod
-    def all_settled(cls, *promises):
+    def all_settled(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
         """Return a new Promise that fulfills when all the Promises have settled i.e. either FULFILLED or REJECTED.
 
         This Promise always fulfills with the list of Promises provided.
@@ -560,7 +586,7 @@ class Promise:
         settle_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.all_settled')
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             nonlocal settle_count
             settle_count += 1
             if settle_count == len(promises):
@@ -571,7 +597,7 @@ class Promise:
         return promise
 
     @classmethod
-    def any(cls, *promises):
+    def any(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
         """Return a new Promise that ignore rejections among the provided Promises and fulfills upon the first fulfillment.
 
         If all Promises reject, it will reject with a PromiseAggregateError.
@@ -584,7 +610,7 @@ class Promise:
         settle_count = 0
         promise = cls(cls._make_multi_executor(promises), named='Promise.any')
 
-        def resolver(settled: cls):
+        def resolver(settled: PromiseType):
             nonlocal settle_count
             settle_count += 1
             if settled._state is FULFILLED:
@@ -675,7 +701,7 @@ class Promise:
 
     @classmethod
     def _resolve_promise_like(cls, this: Promise, obj):
-        calls: Tuple[PromiseState, Any] = []
+        calls: List[Tuple[PromiseState, Any]] = []
 
         def on_fulfill(val):
             calls.append((FULFILLED, val))
