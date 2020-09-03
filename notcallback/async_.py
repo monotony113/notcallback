@@ -135,7 +135,7 @@ class Promise(BasePromise):
                     value = await self._ensure_future(self.send(value))
                 except asyncio.CancelledError:
                     break
-                except Exception as e:
+                except BaseException as e:
                     value = self.throw(e)
             except StopIteration:
                 break
@@ -156,9 +156,9 @@ class Promise(BasePromise):
     async def _ensure_completion(cls, promise):
         try:
             return await promise.awaitable()
-        except PromiseException:
+        except (PromiseException, GeneratorExit, KeyboardInterrupt, SystemExit):
             raise
-        except Exception:
+        except BaseException:
             pass
 
     @classmethod
@@ -298,9 +298,9 @@ class Promise(BasePromise):
             return item
         try:
             return await self.asend(await future)
-        except (GeneratorExit, StopAsyncIteration, PromiseWarning):
+        except (PromiseException, PromiseWarning, GeneratorExit, KeyboardInterrupt, SystemExit):
             raise
-        except Exception as e:
+        except BaseException as e:
             return await self.athrow(e)
 
     def __await__(self):

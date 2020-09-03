@@ -275,7 +275,7 @@ class Promise:
 
         if isinstance(returned, cls):
             yield from returned
-            yield from this._adopt(returned)
+            yield from returned.then(this._make_resolution, this._make_rejection)
             return returned
 
         if getattr(returned, 'then', None) and callable(returned.then):
@@ -403,9 +403,9 @@ class Promise:
                 handler = handlers[settled._state](settled._value)
                 yield from handler
                 yield from self._resolve_promise(promise, handler.result)
-            except PromiseException:
+            except (PromiseException, PromiseWarning, GeneratorExit, KeyboardInterrupt, SystemExit):
                 raise
-            except Exception as e:
+            except BaseException as e:
                 yield from promise._reject(e)
         self._add_resolver(resolver)
 
@@ -460,9 +460,9 @@ class Promise:
             try:
                 yield from on_settle()
                 yield from promise._adopt(self)
-            except PromiseException:
+            except (PromiseException, PromiseWarning, GeneratorExit, KeyboardInterrupt, SystemExit):
                 raise
-            except Exception as e:
+            except BaseException as e:
                 yield from promise._reject(e)
         self._add_resolver(resolver)
 
@@ -643,9 +643,9 @@ class Promise:
     def _dispatch_gen_method(self, func, *args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except (StopIteration, PromiseWarning):
+        except (PromiseException, PromiseWarning, StopIteration, GeneratorExit, KeyboardInterrupt, SystemExit):
             raise
-        except Exception as e:
+        except BaseException as e:
             self._exec = self._reject(e)
             return self._dispatch_gen_method(self._exec.__next__)
 
@@ -710,9 +710,9 @@ class Promise:
             promise = obj.then(on_fulfill, on_reject)
             if isgenerator(obj):
                 yield from promise
-        except PromiseException:
+        except (PromiseException, PromiseWarning, GeneratorExit, KeyboardInterrupt, SystemExit):
             raise
-        except Exception as e:
+        except BaseException as e:
             if not calls:
                 calls.append((REJECTED, e))
         finally:
