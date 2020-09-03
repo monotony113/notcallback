@@ -163,4 +163,4 @@ def one_line_warning_format():
 def _unhandled_rejection_warning(promise):
     if promise._warn_unhandled and promise._state is REJECTED:
         with one_line_warning_format():
-            warnings.warn(UnhandledPromiseRejectionWarning(promise._value))
+            warnings.warn(UnhandledPromiseRejectionWarning(promise))

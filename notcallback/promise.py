@@ -22,13 +22,16 @@
 
 """The Promise class."""
 
+import warnings
 from collections import deque
 from inspect import isgenerator
 
 from .base import FULFILLED, PENDING, REJECTED, PromiseState
 from .exceptions import (PromiseAggregateError, PromiseException,
-                         PromisePending, PromiseRejection, PromiseWarning)
-from .utils import _CachedGeneratorFunc, as_generator_func
+                         PromisePending, PromiseRejection, PromiseWarning,
+                         UnhandledPromiseRejectionWarning)
+from .utils import (_CachedGeneratorFunc, as_generator_func,
+                    one_line_warning_format)
 
 try:
     from typing import (Any, Callable, Generator, List, Optional, Tuple, Type,
@@ -39,6 +42,8 @@ try:
     GeneratorFunc = Callable[..., NoReturnGenerator]
 except ImportError:
     pass
+
+warnings.simplefilter('always', UnhandledPromiseRejectionWarning)
 
 
 def _passthrough(value):
@@ -257,6 +262,10 @@ class Promise:
 
     def _run_resolvers(self):
         """Process resolvers."""
+        if not self._resolvers and self._state is REJECTED:
+            with one_line_warning_format():
+                warnings.warn(UnhandledPromiseRejectionWarning(self))
+            return
         while self._resolvers:
             yield from self._resolvers.popleft()(self)
 

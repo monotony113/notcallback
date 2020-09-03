@@ -6,6 +6,8 @@ from notcallback.promise import FULFILLED, PENDING, REJECTED
 
 from .suppliers import exceptional_reject, simple_reject, simple_resolve
 
+pytestmark = pytest.mark.filterwarnings('ignore::notcallback.exceptions.UnhandledPromiseRejectionWarning')
+
 
 @pytest.mark.asyncio
 async def test_async_pending():

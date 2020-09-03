@@ -97,22 +97,22 @@ class AsyncPromiseWarning(PromiseWarning):
 class UnhandledPromiseRejectionWarning(PromiseWarning):
     """Promise was rejected but there were no `on_reject` handlers reacting to the rejection when the Promise was evaluated."""
 
-    def __init__(self, reason, *args, **kwargs):
-        """Initialize warning with the reason the Promise was rejected (i.e.) its value."""
+    def __init__(self, promise, *args, **kwargs):
+        """Initialize warning with the Promise that was left rejected."""
         super().__init__(*args, **kwargs)
-        self.reason = reason
+        self.promise = promise
 
     def _print_warning(self):
-        reason = self.reason
+        reason = self.promise._value
         warn = self.__class__.__name__ + ': Unhandled Promise rejection: '
         if isinstance(reason, BaseException):
             tb = format_tb(reason.__traceback__)
             return (
-                'Traceback (most recent call last):\n%s%s%s: %s\n'
-                % (''.join(tb), warn, reason.__class__.__name__, str(reason))
+                'Traceback (most recent call last):\n%s%s%s: %s\n  in %s\n'
+                % (''.join(tb), warn, reason.__class__.__name__, str(reason), str(self.promise))
             )
         else:
-            return warn + str(reason)
+            return '%s%s\n  in %s' % (warn, str(reason), str(self.promise))
 
     def __str__(self):
-        return self.__class__.__name__ + ': ' + str(self.reason)
+        return self.__class__.__name__ + ': ' + str(self.promise._value) + '\n'

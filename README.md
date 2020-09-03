@@ -48,8 +48,8 @@ Most importantly:
 already be working with an existing asynchronous/concurrency framework (preferably a callback-based one) for this
 library to be any useful. Otherwise, your Promises will simply run sequentially and block.
 
-Here is an example of how one might turn [Scrapy](https://scrapy.org/)'s `Request` (which uses callbacks and is powered by [Twisted](https://twistedmatrix.com/trac/)) into
-Promise:
+Here is an example of how one might turn [Scrapy](https://scrapy.org/)'s `Request`
+(which uses callbacks and is powered by [Twisted](https://twistedmatrix.com/trac/)) into Promise:
 
 ```python
 import json
@@ -85,7 +85,8 @@ See [`async/await` and asyncio](#async) for more info.
 
 ## Examples
 
-If you are unfamiliar with how Promise works in JavaScript, a great starting point would be MDN's [Promise API reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)
+If you are unfamiliar with how Promise works in JavaScript, a great starting point would be MDN's
+[Promise API reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)
 and the guide to [Using Promises](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Using_promises).
 Most of the usage choices here should be analogous to how Promise is used in JavaScript (except for the generator syntax).
 
@@ -154,6 +155,36 @@ FileNotFoundError: [Errno 2] No such file or directory: 'wrong_file.json'
 <Promise at 0x10b4bad50 (fulfilled) => None>  
 # The state is fulfilled because the exception was successfully handled
 # The value is None because print() returns None.
+```
+
+#### Error handling
+
+The following built-in exceptions will not be caught by Promise:
+
+```python
+GeneratorExit, KeyboardInterrupt, SystemExit
+```
+
+Additionally, the following exceptions represent unexpected behaviors from a Promise and will also be thrown:
+
+```python
+PromiseException  # Base class for Exceptions indicating faulty Promise behaviors
+PromiseWarning  # Indicates behaviors that are correct but may be unintended, such as unhandled rejections.
+                # Normally warned but may be thrown if a warnings filter is set.
+```
+
+`UnhandledPromiseRejectionWarning`, a concrete subclass of `PromiseWarning`, will be displayed when the final
+Promise in a Promise chain is rejected (note that this is not raised):
+
+```python
+def no_recursion(resolve, reject):
+    raise RecursionError()
+
+>>> Promise.settle(Promise(no_recursion))
+Traceback (most recent call last):
+  ...
+UnhandledPromiseRejectionWarning: Unhandled Promise rejection: RecursionError:
+  in <Promise 'no_recursion' at 0x104e3df50 (rejected) => RecursionError()>
 ```
 
 #### Promise branching

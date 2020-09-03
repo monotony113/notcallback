@@ -8,6 +8,8 @@ import pytest
 from notcallback.async_ import Promise
 from notcallback.exceptions import PromiseAggregateError
 
+pytestmark = pytest.mark.filterwarnings('ignore::notcallback.exceptions.UnhandledPromiseRejectionWarning')
+
 LEEWAY = 1.014
 # SEED = random.randrange(sys.maxsize)
 SEED = 8848235470363262384

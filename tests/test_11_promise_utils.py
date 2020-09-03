@@ -1,7 +1,11 @@
 import random
 
+import pytest
+
 from notcallback import Promise
 from notcallback.exceptions import PromiseAggregateError
+
+pytestmark = pytest.mark.filterwarnings('ignore::notcallback.exceptions.UnhandledPromiseRejectionWarning')
 
 
 def test_all_resolved():
