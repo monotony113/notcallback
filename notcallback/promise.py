@@ -519,7 +519,7 @@ class Promise:
     def all(cls: Type[PromiseType], *promises: PromiseType) -> PromiseType:
         """Return a new Promise that fulfills when all the provided Promises are FULFILLED and rejects if any of them is REJECTED.
 
-        If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `tuple` that contains
+        If it fulfills, meaning all the provided Promises are fulfilled, its handlers will receive a `list` that contains
         the values of all the Promises, with order preserved.
 
         If it rejects, it is rejected with the reason of the first rejection that occured.
@@ -552,7 +552,7 @@ class Promise:
                 yield from promise._reject(settled._value)
             fulfillments[settled] = settled._value
             if len(fulfillments) == len(promises):
-                results = (fulfillments[p] for p in promises)
+                results = [fulfillments[p] for p in promises]
                 yield from promise._resolve(results)
 
         for p in promises:
