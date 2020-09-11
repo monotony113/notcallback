@@ -33,6 +33,7 @@ common_config = dict(
     long_description_content_type='text/markdown',
     url='https://github.com/monotony113/notcallback',
     author='Tony Wu',
+    author_email='tony(dot)wu(at)nyu(dot)edu@inval.id',
     license='MIT',
     classifiers=[
         'Development Status :: 3 - Alpha',
